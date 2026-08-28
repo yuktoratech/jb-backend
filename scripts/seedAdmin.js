@@ -1,0 +1,84 @@
+require('dotenv').config();
+
+const mongoose = require('mongoose');
+const { z } = require('zod');
+
+const connectDB = require('../src/config/db');
+const User = require('../src/modules/users/user.model');
+
+const adminEnvironmentVariables = [
+  'ADMIN_NAME',
+  'ADMIN_EMAIL',
+  'ADMIN_PASSWORD',
+];
+
+const seedAdmin = async () => {
+  const missingVariables = adminEnvironmentVariables.filter(
+    (variableName) => !process.env[variableName]?.trim(),
+  );
+
+  if (missingVariables.length > 0) {
+    throw new Error(
+      `Missing required environment variables: ${missingVariables.join(', ')}`,
+    );
+  }
+
+  const emailResult = z
+    .string()
+    .trim()
+    .email()
+    .transform((email) => email.toLowerCase())
+    .safeParse(process.env.ADMIN_EMAIL);
+
+  if (!emailResult.success) {
+    throw new Error('ADMIN_EMAIL must be a valid email address');
+  }
+
+  await connectDB();
+  await User.init();
+
+  const email = emailResult.data;
+  const existingUser = await User.findOne({ email });
+
+  if (existingUser) {
+    if (existingUser.role !== 'admin') {
+      throw new Error(
+        'A non-admin user already uses ADMIN_EMAIL. Choose a different admin email.',
+      );
+    }
+
+    console.log('Admin user already exists. No changes made.');
+    return;
+  }
+
+  await User.create({
+    name: process.env.ADMIN_NAME.trim(),
+    email,
+    password: process.env.ADMIN_PASSWORD,
+    role: 'admin',
+    status: 'active',
+    isEmailVerified: true,
+  });
+
+  console.log('Admin user created successfully.');
+};
+
+const run = async () => {
+  try {
+    await seedAdmin();
+  } catch (error) {
+    console.error('Admin seed failed:', error.message);
+    process.exitCode = 1;
+  } finally {
+    if (mongoose.connection.readyState !== 0) {
+      try {
+        await mongoose.disconnect();
+      } catch (error) {
+        console.error('MongoDB disconnect failed:', error.message);
+        process.exitCode = 1;
+      }
+    }
+  }
+};
+
+run();
