@@ -1,4 +1,5 @@
 const Product = require('../products/product.model');
+const inventoryService = require('../inventory/inventory.service');
 const ProductVariant = require('./productVariant.model');
 const ApiError = require('../../utils/ApiError');
 const {
@@ -10,6 +11,10 @@ const {
 const mapVariantError = (error) => {
   if (error instanceof ApiError) {
     return error;
+  }
+
+  if (error?.name === 'VersionError') {
+    return new ApiError(409, 'Product variant changed concurrently; please retry');
   }
 
   if (error?.code === 11000) {
@@ -150,15 +155,38 @@ const createVariant = async (productId, payload) => {
   await ProductVariant.init();
   await ensureVariantAvailable({ productId, color, sizeSet, sku });
 
+  let variant;
+
   try {
-    return await ProductVariant.create({
+    variant = await ProductVariant.create({
       product: productId,
       color,
       sizeSet,
       sku,
       status: payload.status || 'active',
     });
+    await inventoryService.ensureInventoryForVariant(variant);
+    return variant;
   } catch (error) {
+    if (variant) {
+      try {
+        await inventoryService.deleteInventoriesForVariants([variant._id]);
+        await ProductVariant.deleteOne({ _id: variant._id });
+      } catch (cleanupError) {
+        await ProductVariant.updateOne(
+          { _id: variant._id },
+          { $set: { status: 'inactive' } },
+        ).catch(() => undefined);
+        console.error(
+          `Variant creation cleanup requires review for ${variant._id.toString()}`,
+        );
+        throw new ApiError(
+          500,
+          'Variant creation failed and cleanup could not complete safely',
+        );
+      }
+    }
+
     throw mapVariantError(error);
   }
 };
@@ -201,6 +229,13 @@ const updateVariant = async (variantId, payload) => {
     excludeVariantId: variantId,
   });
 
+  const originalValues = {
+    color: variant.get('color', null, { getters: false }),
+    sizeSet: variant.get('sizeSet', null, { getters: false }),
+    sku: variant.get('sku', null, { getters: false }),
+    status: variant.get('status', null, { getters: false }),
+  };
+
   variant.color = color;
   variant.sizeSet = sizeSet;
   variant.sku = sku;
@@ -209,9 +244,30 @@ const updateVariant = async (variantId, payload) => {
     variant.status = payload.status;
   }
 
+  let variantSaved = false;
+
   try {
-    return await variant.save();
+    await variant.save();
+    variantSaved = true;
+    await inventoryService.syncInventorySku(variant);
+    return variant;
   } catch (error) {
+    if (variantSaved) {
+      try {
+        variant.set(originalValues);
+        await variant.save();
+        await inventoryService.syncInventorySku(variant);
+      } catch (rollbackError) {
+        console.error(
+          `Variant update rollback requires review for ${variant._id.toString()}`,
+        );
+        throw new ApiError(
+          500,
+          'Variant update failed and rollback could not complete safely',
+        );
+      }
+    }
+
     throw mapVariantError(error);
   }
 };
@@ -225,7 +281,12 @@ const deactivateVariant = async (variantId) => {
 
   if (variant.status !== 'inactive') {
     variant.status = 'inactive';
-    await variant.save();
+
+    try {
+      await variant.save();
+    } catch (error) {
+      throw mapVariantError(error);
+    }
   }
 
   return variant;

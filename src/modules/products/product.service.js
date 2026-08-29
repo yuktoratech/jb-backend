@@ -1,4 +1,5 @@
 const Category = require('../categories/category.model');
+const inventoryService = require('../inventory/inventory.service');
 const ProductVariant = require('../variants/productVariant.model');
 const { groupVariants } = require('../variants/variant.service');
 const Product = require('./product.model');
@@ -130,6 +131,13 @@ const buildVariantRecords = (product, colors) =>
 
 const cleanupFailedProductCreation = async (productId) => {
   try {
+    const variants = await ProductVariant.find({ product: productId })
+      .select('_id')
+      .lean();
+
+    await inventoryService.deleteInventoriesForVariants(
+      variants.map(({ _id }) => _id),
+    );
     await ProductVariant.deleteMany({ product: productId });
   } catch (error) {
     await Product.updateOne(
@@ -252,7 +260,10 @@ const createProduct = async (payload) => {
   try {
     await product.save();
     productSaved = true;
-    await ProductVariant.insertMany(variantRecords, { ordered: true });
+    const variants = await ProductVariant.insertMany(variantRecords, {
+      ordered: true,
+    });
+    await inventoryService.ensureInventoriesForVariants(variants);
   } catch (error) {
     if (productSaved) {
       const cleanupSucceeded = await cleanupFailedProductCreation(product._id);
@@ -323,7 +334,10 @@ const updateProduct = async (productId, payload) => {
   if (payload.status === 'inactive') {
     await ProductVariant.updateMany(
       { product: productId },
-      { $set: { status: 'inactive' } },
+      {
+        $set: { status: 'inactive' },
+        $inc: { __v: 1 },
+      },
     );
   }
 
@@ -344,7 +358,10 @@ const deactivateProduct = async (productId) => {
 
   await ProductVariant.updateMany(
     { product: productId },
-    { $set: { status: 'inactive' } },
+    {
+      $set: { status: 'inactive' },
+      $inc: { __v: 1 },
+    },
   );
 
   return getProductById(productId);

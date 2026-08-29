@@ -4,9 +4,12 @@
   "description": "Backend API for the JB B2B wholesale clothing platform",
   "main": "src/server.js",
   "scripts": {
+    "test": "node --test test/*.test.js",
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
-    "seed:admin": "node scripts/seedAdmin.js"
+    "seed:admin": "node scripts/seedAdmin.js",
+    "test:accounts": "node --test test/accounts.integration.test.js",
+    "test:inventory": "node --test test/inventory.integration.test.js"
   },
   "keywords": [],
   "author": "",
@@ -21,6 +24,8 @@
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.9.4",
     "morgan": "^1.11.0",
+    "multer": "^2.3.0",
+    "read-excel-file": "^9.3.10",
     "zod": "^4.4.3"
   },
   "devDependencies": {

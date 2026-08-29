@@ -40,6 +40,7 @@ const productVariantSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
+    optimisticConcurrency: true,
   },
 );
 

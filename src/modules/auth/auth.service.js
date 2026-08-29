@@ -1,16 +1,10 @@
 const User = require('../users/user.model');
 const ApiError = require('../../utils/ApiError');
 const { generateAccessToken } = require('../../utils/jwt');
-
-const toSafeUser = (user) => ({
-  _id: user._id,
-  name: user.name,
-  email: user.email,
-  role: user.role,
-  status: user.status,
-  isEmailVerified: user.isEmailVerified,
-  lastLoginAt: user.lastLoginAt,
-});
+const {
+  ensureActiveWholesalerForRetailer,
+} = require('../users/account.service');
+const { toSafeAccount } = require('../users/account.utils');
 
 const login = async ({ email, password }) => {
   const user = await User.findOne({ email }).select('+password');
@@ -29,6 +23,8 @@ const login = async ({ email, password }) => {
     throw new ApiError(401, 'Account is not active');
   }
 
+  await ensureActiveWholesalerForRetailer(user);
+
   const accessToken = generateAccessToken(user);
   const lastLoginAt = new Date();
 
@@ -43,7 +39,7 @@ const login = async ({ email, password }) => {
 
   return {
     accessToken,
-    user: toSafeUser(user),
+    user: toSafeAccount(user),
   };
 };
 

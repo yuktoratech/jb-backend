@@ -2,11 +2,14 @@ const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 
 const User = require('../modules/users/user.model');
+const {
+  ensureActiveWholesalerForRetailer,
+} = require('../modules/users/account.service');
 const ApiError = require('../utils/ApiError');
 const asyncHandler = require('../utils/asyncHandler');
 
 const authenticatedUserFields =
-  '_id name email role status isEmailVerified lastLoginAt createdAt updatedAt';
+  '_id name email phone role status isEmailVerified lastLoginAt discountPercent parentWholesaler createdAt updatedAt';
 
 const authenticate = asyncHandler(async (req, res, next) => {
   const authorizationHeader = req.get('authorization');
@@ -47,6 +50,8 @@ const authenticate = asyncHandler(async (req, res, next) => {
   if (user.status !== 'active') {
     throw new ApiError(401, 'Account is not active');
   }
+
+  await ensureActiveWholesalerForRetailer(user);
 
   req.user = user;
   return next();
