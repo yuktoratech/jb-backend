@@ -1,0 +1,48 @@
+const ORDER_STATUSES = Object.freeze([
+  'PENDING_WHOLESALER',
+  'PENDING_ADMIN',
+  'CONFIRMED',
+  'REJECTED',
+]);
+
+const ORDER_SOURCE_ROLES = Object.freeze(['wholesaler', 'retailer']);
+
+const ORDER_REJECTED_BY = Object.freeze(['wholesaler', 'admin']);
+
+const ORDER_INVENTORY_STATUSES = Object.freeze([
+  'RESERVED',
+  'RELEASED',
+  'DEDUCTED',
+]);
+
+const ORDER_ACTIVITY_TYPES = Object.freeze([
+  'CREATED',
+  'WHOLESALER_CONFIRMED',
+  'WHOLESALER_REJECTED',
+  'WHOLESALER_ADJUSTED',
+  'ADMIN_CONFIRMED',
+  'ADMIN_REJECTED',
+  'ADMIN_ADJUSTED',
+]);
+
+const ORDER_ACTOR_ROLES = Object.freeze([
+  'admin',
+  'wholesaler',
+  'retailer',
+]);
+
+const MONEY_SCALE = 100;
+const ORDER_PRICING_VERSION = 'ACCOUNT_DISCOUNT_V1';
+const ORDER_NUMBER_PATTERN = /^JB-\d{8}-[A-Z0-9]{6,12}$/;
+
+module.exports = {
+  MONEY_SCALE,
+  ORDER_ACTIVITY_TYPES,
+  ORDER_ACTOR_ROLES,
+  ORDER_INVENTORY_STATUSES,
+  ORDER_NUMBER_PATTERN,
+  ORDER_PRICING_VERSION,
+  ORDER_REJECTED_BY,
+  ORDER_SOURCE_ROLES,
+  ORDER_STATUSES,
+};

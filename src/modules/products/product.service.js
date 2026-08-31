@@ -4,7 +4,20 @@ const ProductVariant = require('../variants/productVariant.model');
 const { groupVariants } = require('../variants/variant.service');
 const Product = require('./product.model');
 const ApiError = require('../../utils/ApiError');
-const { generateSku, normalizeSkuPart } = require('../../utils/sku');
+const {
+  generateSku,
+  normalizeSku,
+  normalizeSkuPart,
+} = require('../../utils/sku');
+
+const migrationProductFields = [
+  'description',
+  'fit',
+  'patternWash',
+  'fabric',
+  'sleeves',
+  'waist',
+];
 
 const productCategoryFields = '_id name slug status';
 
@@ -104,7 +117,7 @@ const ensureSkusAvailable = async (skus) => {
     .lean();
 
   if (existingVariant) {
-    throw new ApiError(409, 'One or more generated SKUs already exist');
+    throw new ApiError(409, 'One or more SKUs already exist');
   }
 };
 
@@ -164,6 +177,49 @@ const cleanupFailedProductCreation = async (productId) => {
     return false;
   }
 };
+
+const persistProductWithVariants = async (product, variantRecords) => {
+  let productSaved = false;
+
+  try {
+    await product.save();
+    productSaved = true;
+    const variants = await ProductVariant.insertMany(variantRecords, {
+      ordered: true,
+    });
+    await inventoryService.ensureInventoriesForVariants(variants);
+  } catch (error) {
+    if (productSaved) {
+      const cleanupSucceeded = await cleanupFailedProductCreation(product._id);
+
+      if (!cleanupSucceeded) {
+        throw new ApiError(
+          500,
+          'Product creation failed and cleanup could not complete safely',
+        );
+      }
+    }
+
+    throw mapCatalogError(error);
+  }
+};
+
+const buildProductDocument = (payload) =>
+  new Product({
+    productName: payload.productName,
+    productCode: payload.productCode,
+    title: payload.title,
+    category: payload.categoryId,
+    description: payload.description,
+    mrp: payload.mrp,
+    fit: payload.fit,
+    patternWash: payload.patternWash,
+    fabric: payload.fabric,
+    sleeves: payload.sleeves,
+    waist: payload.waist,
+    images: payload.images || [],
+    status: payload.status || 'active',
+  });
 
 const getProductById = async (productId) => {
   const [product, variants] = await Promise.all([
@@ -236,50 +292,132 @@ const createProduct = async (payload) => {
   await ensureProductCodeAvailable(payload.productCode);
   await Promise.all([Product.init(), ProductVariant.init()]);
 
-  const product = new Product({
-    productName: payload.productName,
-    productCode: payload.productCode,
-    title: payload.title,
-    category: payload.categoryId,
-    description: payload.description,
-    mrp: payload.mrp,
-    fit: payload.fit,
-    patternWash: payload.patternWash,
-    fabric: payload.fabric,
-    sleeves: payload.sleeves,
-    waist: payload.waist,
-    images: payload.images || [],
-    status: payload.status || 'active',
-  });
+  const product = buildProductDocument(payload);
 
   const variantRecords = buildVariantRecords(product, payload.colors);
   await ensureSkusAvailable(variantRecords.map((variant) => variant.sku));
 
-  let productSaved = false;
+  await persistProductWithVariants(product, variantRecords);
+
+  return getProductById(product._id);
+};
+
+const createProductForMigration = async (payload, variants) => {
+  if (!Array.isArray(variants) || variants.length === 0) {
+    throw new ApiError(400, 'At least one migration variant is required');
+  }
+
+  await ensureActiveCategory(payload.categoryId);
+  await ensureProductCodeAvailable(payload.productCode);
+  await Promise.all([Product.init(), ProductVariant.init()]);
+
+  const product = buildProductDocument(payload);
+  const seenSkus = new Set();
+  const seenCombinations = new Set();
+  const variantRecords = variants.map((variant) => {
+    const color = normalizeSkuPart(variant.color, 'Color');
+    const sizeSet = normalizeSkuPart(variant.sizeSet, 'Size set');
+    const sku = normalizeSku(variant.sku);
+    const combination = `${color}\u0000${sizeSet}`;
+
+    if (seenSkus.has(sku)) {
+      throw new ApiError(400, `Duplicate migration SKU: ${sku}`);
+    }
+
+    if (seenCombinations.has(combination)) {
+      throw new ApiError(
+        400,
+        `Duplicate migration variant combination: ${color} / ${sizeSet}`,
+      );
+    }
+
+    seenSkus.add(sku);
+    seenCombinations.add(combination);
+
+    const record = {
+      product: product._id,
+      color,
+      sizeSet,
+      sku,
+      status: variant.status || product.status,
+    };
+
+    if (variant.sourceProductCode) {
+      record.sourceProductCode = normalizeSku(variant.sourceProductCode);
+    }
+
+    const attributeOverrides = {};
+
+    migrationProductFields
+      .filter((field) => field !== 'description')
+      .forEach((field) => {
+        if (variant.attributeOverrides?.[field]) {
+          attributeOverrides[field] =
+            variant.attributeOverrides[field].trim();
+        }
+      });
+
+    if (Object.keys(attributeOverrides).length > 0) {
+      record.attributeOverrides = attributeOverrides;
+    }
+
+    return record;
+  });
+
+  await ensureSkusAvailable([...seenSkus]);
+  await persistProductWithVariants(product, variantRecords);
+  return getProductById(product._id);
+};
+
+const enrichProductForMigration = async (productId, payload) => {
+  const product = await Product.findById(productId);
+
+  if (!product) {
+    throw new ApiError(404, 'Product not found');
+  }
+
+  if (payload.productCode) {
+    const productCode = normalizeSku(payload.productCode);
+
+    if (product.productCode && product.productCode !== productCode) {
+      throw new ApiError(409, 'Existing product has a different product code');
+    }
+
+    if (!product.productCode) {
+      await ensureProductCodeAvailable(productCode, productId);
+      product.productCode = productCode;
+    }
+  }
+
+  migrationProductFields.forEach((field) => {
+    const nextValue = payload[field]?.trim();
+
+    if (!nextValue) {
+      return;
+    }
+
+    if (product[field] && product[field] !== nextValue) {
+      throw new ApiError(
+        409,
+        `Existing product has a different ${field} value`,
+      );
+    }
+
+    if (!product[field]) {
+      product[field] = nextValue;
+    }
+  });
+
+  if (Array.isArray(payload.images) && payload.images.length > 0) {
+    product.images = [...new Set([...(product.images || []), ...payload.images])];
+  }
 
   try {
     await product.save();
-    productSaved = true;
-    const variants = await ProductVariant.insertMany(variantRecords, {
-      ordered: true,
-    });
-    await inventoryService.ensureInventoriesForVariants(variants);
+    return product;
   } catch (error) {
-    if (productSaved) {
-      const cleanupSucceeded = await cleanupFailedProductCreation(product._id);
-
-      if (!cleanupSucceeded) {
-        throw new ApiError(
-          500,
-          'Product creation failed and cleanup could not complete safely',
-        );
-      }
-    }
-
     throw mapCatalogError(error);
   }
-
-  return getProductById(product._id);
 };
 
 const updateProduct = async (productId, payload) => {
@@ -369,7 +507,9 @@ const deactivateProduct = async (productId) => {
 
 module.exports = {
   createProduct,
+  createProductForMigration,
   deactivateProduct,
+  enrichProductForMigration,
   getProductById,
   listProducts,
   updateProduct,

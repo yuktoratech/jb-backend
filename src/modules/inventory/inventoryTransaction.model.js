@@ -92,6 +92,12 @@ const inventoryTransactionSchema = new mongoose.Schema(
       trim: true,
       maxlength: [255, 'Reference id must not exceed 255 characters'],
     },
+    operationKey: {
+      type: String,
+      trim: true,
+      maxlength: [500, 'Operation key must not exceed 500 characters'],
+      select: false,
+    },
     performedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
@@ -113,20 +119,30 @@ const inventoryTransactionSchema = new mongoose.Schema(
 inventoryTransactionSchema.pre(
   'validate',
   function validateTransferShelves() {
-    if (this.type === 'ADD' && !this.toShelf) {
-      this.invalidate('toShelf', 'Destination shelf is required for ADD');
+    const requiresSourceShelf = [
+      'REMOVE',
+      'TRANSFER',
+      'ORDER_RESERVE',
+      'ORDER_DEDUCT',
+    ].includes(this.type);
+    const requiresDestinationShelf = [
+      'ADD',
+      'TRANSFER',
+      'ORDER_RELEASE',
+    ].includes(this.type);
+
+    if (requiresSourceShelf && !this.fromShelf) {
+      this.invalidate(
+        'fromShelf',
+        `Source shelf is required for ${this.type}`,
+      );
     }
 
-    if (this.type === 'REMOVE' && !this.fromShelf) {
-      this.invalidate('fromShelf', 'Source shelf is required for REMOVE');
-    }
-
-    if (this.type === 'TRANSFER' && !this.fromShelf) {
-      this.invalidate('fromShelf', 'Source shelf is required for TRANSFER');
-    }
-
-    if (this.type === 'TRANSFER' && !this.toShelf) {
-      this.invalidate('toShelf', 'Destination shelf is required for TRANSFER');
+    if (requiresDestinationShelf && !this.toShelf) {
+      this.invalidate(
+        'toShelf',
+        `Destination shelf is required for ${this.type}`,
+      );
     }
 
     if (
@@ -163,6 +179,15 @@ inventoryTransactionSchema.index(
   {
     name: 'inventory_transactions_by_source_reference',
     partialFilterExpression: { referenceId: { $type: 'string' } },
+  },
+);
+
+inventoryTransactionSchema.index(
+  { operationKey: 1 },
+  {
+    unique: true,
+    name: 'unique_inventory_operation_key',
+    partialFilterExpression: { operationKey: { $type: 'string' } },
   },
 );
 

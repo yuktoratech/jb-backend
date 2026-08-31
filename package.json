@@ -8,8 +8,12 @@
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
     "seed:admin": "node scripts/seedAdmin.js",
+    "migration:catalog:validate": "node scripts/validateCatalogMigration.js",
+    "migration:catalog:import": "node scripts/importCatalogMigration.js",
     "test:accounts": "node --test test/accounts.integration.test.js",
-    "test:inventory": "node --test test/inventory.integration.test.js"
+    "test:catalog-migration": "node --test test/catalogMigration.integration.test.js",
+    "test:inventory": "node --test test/inventory.integration.test.js",
+    "test:orders": "node --test test/orders.integration.test.js test/orderInventory.integration.test.js"
   },
   "keywords": [],
   "author": "",

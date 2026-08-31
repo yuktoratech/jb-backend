@@ -30,12 +30,37 @@ const calculateStockStatus = (availableQuantity) =>
 const calculateShelfTotal = (shelves) =>
   shelves.reduce((total, shelfStock) => total + shelfStock.quantity, 0);
 
+const calculateReservedShelfTotal = (reservedShelves = []) =>
+  reservedShelves.reduce(
+    (total, shelfReservation) => total + shelfReservation.quantity,
+    0,
+  );
+
 const recalculateInventoryTotals = (inventory) => {
   const totalQuantity = calculateShelfTotal(inventory.shelves);
-  const reservedQuantity = inventory.reservedQuantity || 0;
+  const reservedShelves = inventory.reservedShelves || [];
+  const shelfQuantityByName = new Map(
+    inventory.shelves.map(({ shelf, quantity }) => [shelf, quantity]),
+  );
+
+  reservedShelves.forEach(({ shelf, quantity }) => {
+    const physicalQuantity = shelfQuantityByName.get(shelf) || 0;
+
+    if (quantity > physicalQuantity) {
+      throw new RangeError(
+        `Reserved quantity on shelf ${shelf} cannot exceed physical stock`,
+      );
+    }
+  });
+
+  const reservedQuantity = calculateReservedShelfTotal(reservedShelves);
 
   if (!Number.isSafeInteger(totalQuantity) || totalQuantity < 0) {
     throw new RangeError('Shelf stock total is outside the supported range');
+  }
+
+  if (!Number.isSafeInteger(reservedQuantity) || reservedQuantity < 0) {
+    throw new RangeError('Reserved shelf total is outside the supported range');
   }
 
   if (reservedQuantity > totalQuantity) {
@@ -43,6 +68,7 @@ const recalculateInventoryTotals = (inventory) => {
   }
 
   inventory.totalQuantity = totalQuantity;
+  inventory.reservedQuantity = reservedQuantity;
   inventory.availableQuantity = totalQuantity - reservedQuantity;
   inventory.status = calculateStockStatus(inventory.availableQuantity);
 
@@ -50,6 +76,7 @@ const recalculateInventoryTotals = (inventory) => {
 };
 
 module.exports = {
+  calculateReservedShelfTotal,
   calculateShelfTotal,
   calculateStockStatus,
   normalizeShelf,

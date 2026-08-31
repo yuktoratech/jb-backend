@@ -8,6 +8,14 @@ const {
   normalizeSkuPart,
 } = require('../../utils/sku');
 
+const migrationAttributeFields = [
+  'fit',
+  'patternWash',
+  'fabric',
+  'sleeves',
+  'waist',
+];
+
 const mapVariantError = (error) => {
   if (error instanceof ApiError) {
     return error;
@@ -59,6 +67,8 @@ const groupVariants = (variants) => {
       variantId: variant._id,
       sizeSet: variant.sizeSet,
       sku: variant.sku,
+      sourceProductCode: variant.sourceProductCode,
+      attributeOverrides: variant.attributeOverrides,
       status: variant.status,
       createdAt: variant.createdAt,
       updatedAt: variant.updatedAt,
@@ -133,7 +143,11 @@ const listProductVariants = async (productId, { status }) => {
   };
 };
 
-const createVariant = async (productId, payload) => {
+const createVariantInternal = async (
+  productId,
+  payload,
+  { includeMigrationMetadata = false } = {},
+) => {
   const product = await Product.findById(productId)
     .select('_id productName status')
     .lean();
@@ -158,13 +172,35 @@ const createVariant = async (productId, payload) => {
   let variant;
 
   try {
-    variant = await ProductVariant.create({
+    const variantPayload = {
       product: productId,
       color,
       sizeSet,
       sku,
       status: payload.status || 'active',
-    });
+    };
+
+    if (includeMigrationMetadata) {
+      if (payload.sourceProductCode) {
+        variantPayload.sourceProductCode = normalizeSku(
+          payload.sourceProductCode,
+        );
+      }
+
+      const attributeOverrides = {};
+
+      migrationAttributeFields.forEach((field) => {
+        if (payload.attributeOverrides?.[field]) {
+          attributeOverrides[field] = payload.attributeOverrides[field].trim();
+        }
+      });
+
+      if (Object.keys(attributeOverrides).length > 0) {
+        variantPayload.attributeOverrides = attributeOverrides;
+      }
+    }
+
+    variant = await ProductVariant.create(variantPayload);
     await inventoryService.ensureInventoryForVariant(variant);
     return variant;
   } catch (error) {
@@ -187,6 +223,68 @@ const createVariant = async (productId, payload) => {
       }
     }
 
+    throw mapVariantError(error);
+  }
+};
+
+const createVariant = (productId, payload) =>
+  createVariantInternal(productId, payload);
+
+const createVariantForMigration = (productId, payload) =>
+  createVariantInternal(productId, payload, {
+    includeMigrationMetadata: true,
+  });
+
+const enrichVariantForMigration = async (variantId, payload) => {
+  const variant = await ProductVariant.findById(variantId);
+
+  if (!variant) {
+    throw new ApiError(404, 'Product variant not found');
+  }
+
+  if (payload.sourceProductCode) {
+    const sourceProductCode = normalizeSku(payload.sourceProductCode);
+
+    if (
+      variant.sourceProductCode &&
+      variant.sourceProductCode !== sourceProductCode
+    ) {
+      throw new ApiError(
+        409,
+        'Existing variant has a different source product code',
+      );
+    }
+
+    if (!variant.sourceProductCode) {
+      variant.sourceProductCode = sourceProductCode;
+    }
+  }
+
+  migrationAttributeFields.forEach((field) => {
+    const nextValue = payload.attributeOverrides?.[field]?.trim();
+
+    if (!nextValue) {
+      return;
+    }
+
+    const currentValue = variant.attributeOverrides?.[field];
+
+    if (currentValue && currentValue !== nextValue) {
+      throw new ApiError(
+        409,
+        `Existing variant has a different ${field} override`,
+      );
+    }
+
+    if (!currentValue) {
+      variant.set(`attributeOverrides.${field}`, nextValue);
+    }
+  });
+
+  try {
+    await variant.save();
+    return variant;
+  } catch (error) {
     throw mapVariantError(error);
   }
 };
@@ -294,7 +392,9 @@ const deactivateVariant = async (variantId) => {
 
 module.exports = {
   createVariant,
+  createVariantForMigration,
   deactivateVariant,
+  enrichVariantForMigration,
   groupVariants,
   listProductVariants,
   updateVariant,

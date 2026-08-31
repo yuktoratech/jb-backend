@@ -174,6 +174,7 @@ const deactivateCategory = async (categoryId) => {
 };
 
 module.exports = {
+  createCategorySlug: createSlug,
   createCategory,
   deactivateCategory,
   getCategoryById,

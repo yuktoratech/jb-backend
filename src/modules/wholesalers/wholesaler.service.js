@@ -1,4 +1,5 @@
 const User = require('../users/user.model');
+const Order = require('../orders/order.model');
 const ApiError = require('../../utils/ApiError');
 const {
   createManagedAccount,
@@ -111,6 +112,22 @@ const updateWholesaler = async (wholesalerId, payload) => {
 
 const updateWholesalerStatus = async (wholesalerId, status) => {
   const wholesaler = await findWholesaler(wholesalerId);
+
+  if (status === 'inactive' && wholesaler.status !== 'inactive') {
+    const pendingRetailerOrder = await Order.exists({
+      wholesaler: wholesaler._id,
+      sourceRole: 'retailer',
+      status: 'PENDING_WHOLESALER',
+    });
+
+    if (pendingRetailerOrder) {
+      throw new ApiError(
+        409,
+        'Wholesaler has Retailer orders awaiting approval; confirm or reject them before deactivation',
+      );
+    }
+  }
+
   return updateManagedAccountStatus(wholesaler, status);
 };
 

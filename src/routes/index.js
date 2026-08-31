@@ -1,8 +1,10 @@
 const express = require('express');
 
 const authRoutes = require('../modules/auth/auth.routes');
+const catalogMigrationRoutes = require('../modules/catalogMigration/catalogMigration.routes');
 const categoryRoutes = require('../modules/categories/category.routes');
 const inventoryRoutes = require('../modules/inventory/inventory.routes');
+const orderRoutes = require('../modules/orders/order.routes');
 const productRoutes = require('../modules/products/product.routes');
 const retailerRoutes = require('../modules/retailers/retailer.routes');
 const variantRoutes = require('../modules/variants/variant.routes');
@@ -18,8 +20,10 @@ router.get('/health', (req, res) => {
 });
 
 router.use('/auth', authRoutes);
+router.use('/catalog-migrations', catalogMigrationRoutes);
 router.use('/categories', categoryRoutes);
 router.use('/inventory', inventoryRoutes);
+router.use('/orders', orderRoutes);
 router.use('/products', productRoutes);
 router.use('/retailers', retailerRoutes);
 router.use('/variants', variantRoutes);

@@ -60,6 +60,7 @@ const inventoryDefaults = (variant) => ({
   variant: variant._id,
   sku: variant.sku,
   shelves: [],
+  reservedShelves: [],
   availableQuantity: 0,
   reservedQuantity: 0,
   totalQuantity: 0,
@@ -141,8 +142,17 @@ const syncInventorySku = async (variant) => {
 const copyShelves = (shelves) =>
   shelves.map(({ shelf, quantity }) => ({ shelf, quantity }));
 
+const copyReservedShelves = (reservedShelves = []) =>
+  reservedShelves.map(({ shelf, quantity }) => ({ shelf, quantity }));
+
 const getShelfStock = (inventory, shelf) =>
   inventory.shelves.find((entry) => entry.shelf === shelf);
+
+const getReservedShelfStock = (inventory, shelf) =>
+  (inventory.reservedShelves || []).find((entry) => entry.shelf === shelf);
+
+const getReservedQuantityOnShelf = (inventory, shelf) =>
+  getReservedShelfStock(inventory, shelf)?.quantity || 0;
 
 const addToShelf = (inventory, shelf, quantity) => {
   let shelfStock = getShelfStock(inventory, shelf);
@@ -168,10 +178,13 @@ const removeFromShelf = (inventory, shelf, quantity) => {
     throw new ApiError(409, `Source shelf ${shelf} has no stock for this SKU`);
   }
 
-  if (shelfStock.quantity < quantity) {
+  const availableOnShelf =
+    shelfStock.quantity - getReservedQuantityOnShelf(inventory, shelf);
+
+  if (availableOnShelf < quantity) {
     throw new ApiError(
       409,
-      `Insufficient stock on shelf ${shelf}. Available: ${shelfStock.quantity}`,
+      `Insufficient unreserved stock on shelf ${shelf}. Available: ${availableOnShelf}`,
     );
   }
 
@@ -212,7 +225,10 @@ const applyStockChange = (inventory, adjustment) => {
   }
 };
 
-const createTransactionWithRetry = async (payload) => {
+const createTransactionWithRetry = async (
+  payload,
+  { includeMetadata = false } = {},
+) => {
   const transactionPayload = {
     ...payload,
     _id: payload._id || new mongoose.Types.ObjectId(),
@@ -221,16 +237,32 @@ const createTransactionWithRetry = async (payload) => {
 
   for (let attempt = 1; attempt <= TRANSACTION_WRITE_RETRIES; attempt += 1) {
     try {
-      return await InventoryTransaction.create(transactionPayload);
+      const transaction = await InventoryTransaction.create(
+        transactionPayload,
+      );
+      return includeMetadata
+        ? { transaction, createdByAttempt: true }
+        : transaction;
     } catch (error) {
       lastError = error;
 
-      const existingTransaction = await InventoryTransaction.findById(
-        transactionPayload._id,
-      ).catch(() => null);
+      const existingTransaction = await InventoryTransaction.findOne({
+        $or: [
+          { _id: transactionPayload._id },
+          ...(transactionPayload.operationKey
+            ? [{ operationKey: transactionPayload.operationKey }]
+            : []),
+        ],
+      }).catch(() => null);
 
       if (existingTransaction) {
-        return existingTransaction;
+        const createdByAttempt =
+          existingTransaction._id.toString() ===
+          transactionPayload._id.toString();
+
+        return includeMetadata
+          ? { transaction: existingTransaction, createdByAttempt }
+          : existingTransaction;
       }
     }
   }
@@ -244,6 +276,7 @@ const restoreInventorySnapshot = async (inventory, snapshot) => {
     {
       $set: {
         shelves: snapshot.shelves,
+        reservedShelves: snapshot.reservedShelves,
         availableQuantity: snapshot.availableQuantity,
         reservedQuantity: snapshot.reservedQuantity,
         totalQuantity: snapshot.totalQuantity,
@@ -270,6 +303,52 @@ const formatInventoryDocument = (inventory) => ({
   updatedAt: inventory.updatedAt,
 });
 
+const transactionMatchesAdjustment = (transaction, adjustment) => {
+  if (
+    transaction.type !== adjustment.type ||
+    transaction.sku !== adjustment.sku ||
+    transaction.quantity !== adjustment.quantity
+  ) {
+    return false;
+  }
+
+  if (adjustment.type === 'ADD') {
+    return transaction.toShelf === adjustment.shelf;
+  }
+
+  if (adjustment.type === 'REMOVE') {
+    return transaction.fromShelf === adjustment.shelf;
+  }
+
+  return (
+    transaction.fromShelf === adjustment.shelf &&
+    transaction.toShelf === adjustment.toShelf
+  );
+};
+
+const findCompletedInventoryOperation = async (adjustment) => {
+  if (!adjustment.operationKey) {
+    return null;
+  }
+
+  const transaction = await InventoryTransaction.findOne({
+    operationKey: adjustment.operationKey,
+  }).select('+operationKey');
+
+  if (!transaction) {
+    return null;
+  }
+
+  if (!transactionMatchesAdjustment(transaction, adjustment)) {
+    throw new ApiError(
+      409,
+      'Inventory operation key is already associated with different stock data',
+    );
+  }
+
+  return transaction;
+};
+
 const performAdjustmentUnlocked = async ({
   variant,
   adjustment,
@@ -289,6 +368,18 @@ const performAdjustmentUnlocked = async ({
       }
     }
 
+    const completedOperation = await findCompletedInventoryOperation(
+      adjustment,
+    );
+
+    if (completedOperation) {
+      return {
+        inventory: formatInventoryDocument(inventory),
+        transaction: completedOperation,
+        alreadyApplied: true,
+      };
+    }
+
     if (inventory.sku !== adjustment.sku) {
       throw new ApiError(
         409,
@@ -298,6 +389,7 @@ const performAdjustmentUnlocked = async ({
 
     const snapshot = {
       shelves: copyShelves(inventory.shelves),
+      reservedShelves: copyReservedShelves(inventory.reservedShelves),
       availableQuantity: inventory.availableQuantity,
       reservedQuantity: inventory.reservedQuantity,
       totalQuantity: inventory.totalQuantity,
@@ -350,10 +442,55 @@ const performAdjustmentUnlocked = async ({
       transactionPayload.note = note;
     }
 
+    if (adjustment.operationKey) {
+      transactionPayload.operationKey = adjustment.operationKey;
+    }
+
     let transaction;
 
     try {
-      transaction = await createTransactionWithRetry(transactionPayload);
+      const transactionResult = await createTransactionWithRetry(
+        transactionPayload,
+        { includeMetadata: Boolean(adjustment.operationKey) },
+      );
+
+      if (adjustment.operationKey) {
+        transaction = transactionResult.transaction;
+
+        if (!transactionResult.createdByAttempt) {
+          if (!transactionMatchesAdjustment(transaction, adjustment)) {
+            throw new ApiError(
+              409,
+              'Inventory operation key is already associated with different stock data',
+            );
+          }
+
+          const restored = await restoreInventorySnapshot(
+            inventory,
+            snapshot,
+          ).catch(() => false);
+
+          if (!restored) {
+            console.error(
+              `CRITICAL: duplicate inventory operation ${adjustment.operationKey} could not restore inventory ${inventory._id.toString()}`,
+            );
+            throw new ApiError(
+              500,
+              'Inventory adjustment needs administrator review',
+            );
+          }
+
+          const restoredInventory = await Inventory.findById(inventory._id);
+
+          return {
+            inventory: formatInventoryDocument(restoredInventory),
+            transaction,
+            alreadyApplied: true,
+          };
+        }
+      } else {
+        transaction = transactionResult;
+      }
     } catch (error) {
       const restored = await restoreInventorySnapshot(inventory, snapshot).catch(
         () => false,
@@ -363,6 +500,10 @@ const performAdjustmentUnlocked = async ({
         console.error(
           `CRITICAL: inventory ${inventory._id.toString()} changed but its transaction history could not be written`,
         );
+      }
+
+      if (restored && error instanceof ApiError && error.statusCode === 409) {
+        throw error;
       }
 
       throw new ApiError(
@@ -468,6 +609,9 @@ const adjustInventory = async (payload, context = {}) => {
 const simulateAdjustment = (simulatedInventory, adjustment) => {
   const { shelves } = simulatedInventory;
   const sourceQuantity = shelves.get(adjustment.shelf) || 0;
+  const reservedOnSourceShelf =
+    simulatedInventory.reservedShelves.get(adjustment.shelf) || 0;
+  const availableOnSourceShelf = sourceQuantity - reservedOnSourceShelf;
 
   if (adjustment.type === 'ADD') {
     const nextQuantity = sourceQuantity + adjustment.quantity;
@@ -486,8 +630,8 @@ const simulateAdjustment = (simulatedInventory, adjustment) => {
     return null;
   }
 
-  if (sourceQuantity < adjustment.quantity) {
-    return `Insufficient stock on shelf ${adjustment.shelf}. Available: ${sourceQuantity}`;
+  if (availableOnSourceShelf < adjustment.quantity) {
+    return `Insufficient unreserved stock on shelf ${adjustment.shelf}. Available: ${availableOnSourceShelf}`;
   }
 
   if (
@@ -543,11 +687,18 @@ const validateAdjustmentBatch = async (adjustments) => {
         quantity,
       ]),
     );
+    const reservedShelves = new Map(
+      (inventory?.reservedShelves || []).map(({ shelf, quantity }) => [
+        shelf,
+        quantity,
+      ]),
+    );
 
     simulatedInventories.set(
       variant.sku,
       {
         shelves,
+        reservedShelves,
         totalQuantity: [...shelves.values()].reduce(
           (total, quantity) => total + quantity,
           0,
@@ -640,7 +791,9 @@ const applyAdjustmentBatch = async (
             referenceId,
           });
 
-          applied.push({ adjustment, result });
+          if (!result.alreadyApplied) {
+            applied.push({ adjustment, result });
+          }
         }
       } catch (error) {
         if (applied.length === 0) {
@@ -685,6 +838,533 @@ const applyAdjustmentBatch = async (
       return { errors: [], applied };
     },
   );
+
+const inventorySnapshot = (inventory) => ({
+  shelves: copyShelves(inventory.shelves),
+  reservedShelves: copyReservedShelves(inventory.reservedShelves),
+  availableQuantity: inventory.availableQuantity,
+  reservedQuantity: inventory.reservedQuantity,
+  totalQuantity: inventory.totalQuantity,
+  status: inventory.status,
+});
+
+const getOrderInventoryEntries = async (lines) => {
+  const variantIds = lines.map(({ variantId }) => variantId.toString());
+
+  if (new Set(variantIds).size !== variantIds.length) {
+    throw new ApiError(400, 'An order cannot contain duplicate variants');
+  }
+
+  const inventories = await Inventory.find({
+    variant: { $in: variantIds },
+  });
+  const inventoryByVariant = new Map(
+    inventories.map((inventory) => [
+      inventory.variant.toString(),
+      inventory,
+    ]),
+  );
+
+  return lines.map((line) => {
+    const inventory = inventoryByVariant.get(line.variantId.toString());
+
+    if (!inventory) {
+      throw new ApiError(409, `Inventory is not available for SKU ${line.sku}`);
+    }
+
+    if (!inventory.reservedShelves) {
+      inventory.reservedShelves = [];
+    }
+
+    return { inventory, line };
+  });
+};
+
+const withOrderInventoryLocks = async (lines, work) => {
+  const inventories = await Inventory.find({
+    variant: { $in: lines.map(({ variantId }) => variantId) },
+  })
+    .select('variant sku')
+    .lean();
+
+  if (inventories.length !== lines.length) {
+    throw new ApiError(409, 'Inventory is unavailable for one or more items');
+  }
+
+  return withInventoryLocks(
+    inventories.map(({ sku }) => sku),
+    async () => {
+      const entries = await getOrderInventoryEntries(lines);
+      const lockedSkus = new Set(inventories.map(({ sku }) => sku));
+
+      if (entries.some(({ inventory }) => !lockedSkus.has(inventory.sku))) {
+        throw new ApiError(
+          409,
+          'Inventory SKU synchronization is in progress; please retry',
+        );
+      }
+
+      return work(entries);
+    },
+  );
+};
+
+const changeReservedShelfQuantity = (inventory, shelf, quantityDelta) => {
+  let reservation = getReservedShelfStock(inventory, shelf);
+
+  if (!reservation && quantityDelta > 0) {
+    inventory.reservedShelves.push({ shelf, quantity: 0 });
+    reservation = getReservedShelfStock(inventory, shelf);
+  }
+
+  if (!reservation || reservation.quantity + quantityDelta < 0) {
+    throw new ApiError(
+      409,
+      `Reserved stock on shelf ${shelf} is inconsistent`,
+    );
+  }
+
+  reservation.quantity += quantityDelta;
+
+  if (reservation.quantity === 0) {
+    inventory.reservedShelves = inventory.reservedShelves.filter(
+      (entry) => entry.shelf !== shelf,
+    );
+  }
+};
+
+const allocateAvailableShelves = (inventory, quantity) => {
+  let remaining = quantity;
+  const allocations = [];
+
+  for (const shelfStock of inventory.shelves) {
+    const availableOnShelf =
+      shelfStock.quantity -
+      getReservedQuantityOnShelf(inventory, shelfStock.shelf);
+
+    if (availableOnShelf <= 0) {
+      continue;
+    }
+
+    const allocatedQuantity = Math.min(availableOnShelf, remaining);
+    allocations.push({
+      shelf: shelfStock.shelf,
+      quantity: allocatedQuantity,
+    });
+    changeReservedShelfQuantity(
+      inventory,
+      shelfStock.shelf,
+      allocatedQuantity,
+    );
+    remaining -= allocatedQuantity;
+
+    if (remaining === 0) {
+      break;
+    }
+  }
+
+  if (remaining > 0) {
+    throw new ApiError(
+      409,
+      `Insufficient stock for SKU ${inventory.sku}. Available: ${inventory.availableQuantity}`,
+    );
+  }
+
+  return allocations;
+};
+
+const mergeAllocations = (existingAllocations, additionalAllocations) => {
+  const merged = existingAllocations.map(({ shelf, quantity }) => ({
+    shelf,
+    quantity,
+  }));
+
+  additionalAllocations.forEach(({ shelf, quantity }) => {
+    const existing = merged.find((allocation) => allocation.shelf === shelf);
+
+    if (existing) {
+      existing.quantity += quantity;
+    } else {
+      merged.push({ shelf, quantity });
+    }
+  });
+
+  return merged;
+};
+
+const releaseFromAllocationTail = (inventory, allocations, quantity) => {
+  let remainingToRelease = quantity;
+  const releasedAllocations = [];
+  const nextAllocations = allocations.map(({ shelf, quantity: allocated }) => ({
+    shelf,
+    quantity: allocated,
+  }));
+
+  for (
+    let index = nextAllocations.length - 1;
+    index >= 0 && remainingToRelease > 0;
+    index -= 1
+  ) {
+    const allocation = nextAllocations[index];
+    const releasedQuantity = Math.min(
+      allocation.quantity,
+      remainingToRelease,
+    );
+
+    changeReservedShelfQuantity(
+      inventory,
+      allocation.shelf,
+      -releasedQuantity,
+    );
+    releasedAllocations.unshift({
+      shelf: allocation.shelf,
+      quantity: releasedQuantity,
+    });
+    allocation.quantity -= releasedQuantity;
+    remainingToRelease -= releasedQuantity;
+  }
+
+  if (remainingToRelease > 0) {
+    throw new ApiError(409, 'Order inventory allocation is inconsistent');
+  }
+
+  return {
+    nextAllocations: nextAllocations.filter(
+      ({ quantity: allocated }) => allocated > 0,
+    ),
+    releasedAllocations,
+  };
+};
+
+const allocationTotal = (allocations = []) =>
+  allocations.reduce((total, allocation) => {
+    const nextTotal = total + allocation.quantity;
+
+    if (!Number.isSafeInteger(nextTotal) || nextTotal < 0) {
+      throw new ApiError(409, 'Order inventory allocation is too large');
+    }
+
+    return nextTotal;
+  }, 0);
+
+const rollbackOrderInventoryChanges = async (changes, transactionRecords) => {
+  const failedInventoryRollbacks = [];
+  const restoredInventoryIds = new Set();
+
+  for (const change of [...changes].reverse()) {
+    const restored = await restoreInventorySnapshot(
+      change.inventory,
+      change.snapshot,
+    ).catch(() => false);
+
+    if (!restored) {
+      failedInventoryRollbacks.push(change.inventory._id.toString());
+    } else {
+      restoredInventoryIds.add(change.inventory._id.toString());
+    }
+  }
+
+  const transactionIdsToRemove = transactionRecords
+    .filter(({ inventoryId }) => restoredInventoryIds.has(inventoryId))
+    .map(({ transactionId }) => transactionId);
+  let transactionsRemoved = true;
+
+  if (transactionIdsToRemove.length > 0) {
+    transactionsRemoved = await InventoryTransaction.deleteMany({
+      _id: { $in: transactionIdsToRemove },
+    })
+      .then(() => true)
+      .catch(() => false);
+  }
+
+  return {
+    succeeded:
+      failedInventoryRollbacks.length === 0 && transactionsRemoved,
+    failedInventoryRollbacks,
+  };
+};
+
+const persistOrderInventoryChanges = async (
+  changes,
+  context,
+  result,
+  commit,
+) => {
+  const savedChanges = [];
+  const transactionRecords = [];
+
+  try {
+    await InventoryTransaction.init();
+
+    for (const change of changes) {
+      await change.inventory.save();
+      savedChanges.push(change);
+    }
+
+    for (const change of changes) {
+      for (const allocation of change.transactionAllocations) {
+        const transactionPayload = {
+          inventory: change.inventory._id,
+          variant: change.inventory.variant,
+          sku: change.inventory.sku,
+          type: change.type,
+          quantity: allocation.quantity,
+          previousQuantity: change.previousQuantity,
+          newQuantity: change.inventory.availableQuantity,
+          source: 'order',
+          referenceId: context.referenceId,
+          operationKey: [
+            context.referenceId,
+            change.type,
+            change.inventory.variant.toString(),
+            allocation.shelf,
+          ].join(':'),
+          performedBy: context.performedBy,
+          note: context.note,
+        };
+
+        if (change.type === 'ORDER_RELEASE') {
+          transactionPayload.toShelf = allocation.shelf;
+        } else {
+          transactionPayload.fromShelf = allocation.shelf;
+        }
+
+        const transactionResult = await createTransactionWithRetry(
+          transactionPayload,
+          { includeMetadata: true },
+        );
+
+        if (!transactionResult.createdByAttempt) {
+          const existing = transactionResult.transaction;
+          const sameOperation =
+            existing.inventory.toString() ===
+              transactionPayload.inventory.toString() &&
+            existing.variant.toString() ===
+              transactionPayload.variant.toString() &&
+            existing.type === transactionPayload.type &&
+            existing.quantity === transactionPayload.quantity &&
+            existing.referenceId === transactionPayload.referenceId &&
+            (existing.fromShelf || undefined) ===
+              transactionPayload.fromShelf &&
+            (existing.toShelf || undefined) === transactionPayload.toShelf;
+
+          if (!sameOperation) {
+            throw new ApiError(
+              409,
+              'Inventory operation key conflicts with existing history',
+            );
+          }
+
+          throw new ApiError(
+            409,
+            'Inventory operation was already recorded; order state requires review',
+          );
+        }
+
+        transactionRecords.push({
+          inventoryId: change.inventory._id.toString(),
+          transactionId: transactionResult.transaction._id,
+        });
+      }
+    }
+
+    const committedValue = commit ? await commit(result) : undefined;
+    return { committedValue, result };
+  } catch (error) {
+    const rollback = await rollbackOrderInventoryChanges(
+      savedChanges,
+      transactionRecords,
+    );
+
+    if (!rollback.succeeded) {
+      console.error(
+        `CRITICAL: order inventory operation ${context.referenceId} needs reconciliation`,
+      );
+      throw new ApiError(
+        500,
+        'Order inventory operation needs administrator review',
+      );
+    }
+
+    if (error?.name === 'VersionError') {
+      throw new ApiError(409, 'Inventory changed concurrently; please retry');
+    }
+
+    throw error;
+  }
+};
+
+const reconcileOrderStock = async (lines, context = {}, commit) => {
+  if (!context.referenceId) {
+    throw new ApiError(500, 'Order inventory reference is required');
+  }
+
+  return withOrderInventoryLocks(lines, async (entries) => {
+    const changes = [];
+    const allocations = [];
+
+    for (const { inventory, line } of entries) {
+      const currentQuantity = line.currentQuantity || 0;
+      const nextQuantity = line.nextQuantity;
+      const existingAllocations = (line.inventoryAllocation || []).map(
+        ({ shelf, quantity }) => ({ shelf, quantity }),
+      );
+
+      if (
+        !Number.isSafeInteger(currentQuantity) ||
+        currentQuantity < 0 ||
+        !Number.isSafeInteger(nextQuantity) ||
+        nextQuantity < 0
+      ) {
+        throw new ApiError(400, 'Order quantities must be whole numbers');
+      }
+
+      if (allocationTotal(existingAllocations) !== currentQuantity) {
+        throw new ApiError(409, 'Order inventory allocation is inconsistent');
+      }
+
+      const snapshot = inventorySnapshot(inventory);
+      const previousQuantity = inventory.availableQuantity;
+      let nextAllocations = existingAllocations;
+      let transactionAllocations = [];
+      let type;
+
+      if (nextQuantity > currentQuantity) {
+        const quantityToReserve = nextQuantity - currentQuantity;
+        const additionalAllocations = allocateAvailableShelves(
+          inventory,
+          quantityToReserve,
+        );
+        nextAllocations = mergeAllocations(
+          existingAllocations,
+          additionalAllocations,
+        );
+        transactionAllocations = additionalAllocations;
+        type = 'ORDER_RESERVE';
+      } else if (nextQuantity < currentQuantity) {
+        const release = releaseFromAllocationTail(
+          inventory,
+          existingAllocations,
+          currentQuantity - nextQuantity,
+        );
+        nextAllocations = release.nextAllocations;
+        transactionAllocations = release.releasedAllocations;
+        type = 'ORDER_RELEASE';
+      }
+
+      recalculateInventoryTotals(inventory);
+      allocations.push({
+        variantId: inventory.variant,
+        inventoryAllocation: nextAllocations,
+      });
+
+      if (type) {
+        changes.push({
+          inventory,
+          previousQuantity,
+          quantity: Math.abs(nextQuantity - currentQuantity),
+          snapshot,
+          transactionAllocations,
+          type,
+        });
+      }
+    }
+
+    if (changes.length === 0) {
+      const committedValue = commit ? await commit(allocations) : undefined;
+      return { committedValue, result: allocations };
+    }
+
+    return persistOrderInventoryChanges(
+      changes,
+      context,
+      allocations,
+      commit,
+    );
+  });
+};
+
+const reserveOrderStock = (lines, context, commit) =>
+  reconcileOrderStock(
+    lines.map((line) => ({
+      ...line,
+      currentQuantity: 0,
+      nextQuantity: line.quantity,
+      inventoryAllocation: [],
+    })),
+    context,
+    commit,
+  );
+
+const releaseOrderStock = (items, context, commit) =>
+  reconcileOrderStock(
+    items.map((item) => ({
+      ...item,
+      currentQuantity: item.quantity,
+      nextQuantity: 0,
+    })),
+    context,
+    commit,
+  );
+
+const finalizeOrderStock = async (items, context = {}, commit) => {
+  if (!context.referenceId) {
+    throw new ApiError(500, 'Order inventory reference is required');
+  }
+
+  return withOrderInventoryLocks(items, async (entries) => {
+    const changes = [];
+
+    for (const { inventory, line } of entries) {
+      const allocations = (line.inventoryAllocation || []).map(
+        ({ shelf, quantity }) => ({ shelf, quantity }),
+      );
+
+      if (allocationTotal(allocations) !== line.quantity) {
+        throw new ApiError(409, 'Order inventory allocation is inconsistent');
+      }
+
+      const snapshot = inventorySnapshot(inventory);
+      const previousQuantity = inventory.availableQuantity;
+
+      allocations.forEach(({ shelf, quantity }) => {
+        const shelfStock = getShelfStock(inventory, shelf);
+        const reservedOnShelf = getReservedQuantityOnShelf(inventory, shelf);
+
+        if (!shelfStock || shelfStock.quantity < quantity) {
+          throw new ApiError(409, 'Physical order stock is inconsistent');
+        }
+
+        if (reservedOnShelf < quantity) {
+          throw new ApiError(409, 'Reserved order stock is inconsistent');
+        }
+
+        shelfStock.quantity -= quantity;
+        changeReservedShelfQuantity(inventory, shelf, -quantity);
+      });
+
+      inventory.shelves = inventory.shelves.filter(
+        ({ quantity }) => quantity > 0,
+      );
+      recalculateInventoryTotals(inventory);
+      changes.push({
+        inventory,
+        previousQuantity,
+        quantity: line.quantity,
+        snapshot,
+        transactionAllocations: allocations,
+        type: 'ORDER_DEDUCT',
+      });
+    }
+
+    return persistOrderInventoryChanges(
+      changes,
+      context,
+      items,
+      commit,
+    );
+  });
+};
 
 const buildInventoryProjection = () => ({
   _id: 0,
@@ -910,11 +1590,15 @@ module.exports = {
   deleteInventoriesForVariants,
   ensureInventoriesForVariants,
   ensureInventoryForVariant,
+  finalizeOrderStock,
   getInventoryBySku,
   getInventoryByVariantId,
   importAdjustments,
   listInventory,
   listTransactions,
+  reconcileOrderStock,
+  releaseOrderStock,
+  reserveOrderStock,
   syncInventorySku,
   validateAdjustmentBatch,
 };
