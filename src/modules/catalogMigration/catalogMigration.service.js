@@ -766,9 +766,7 @@ const getInventoryActions = async (groups, variantActions, state) => {
         const hasStock =
           existing.totalQuantity !== 0 ||
           existing.availableQuantity !== 0 ||
-          existing.reservedQuantity !== 0 ||
-          (existing.shelves || []).length > 0 ||
-          (existing.reservedShelves || []).length > 0;
+          (existing.shelves || []).length > 0;
         const transactionCount =
           transactionCounts.get(objectIdString(existing.variant)) || 0;
 

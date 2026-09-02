@@ -3,6 +3,9 @@ const mongoose = require('mongoose');
 const ApiError = require('../../utils/ApiError');
 const { normalizeSku } = require('../../utils/sku');
 const Product = require('../products/product.model');
+const ProductColour = require('../productColours/productColour.model');
+const Colour = require('../colours/colour.model');
+const SizeSet = require('../sizeSets/sizeSet.model');
 const ProductVariant = require('../variants/productVariant.model');
 const Inventory = require('./inventory.model');
 const InventoryTransaction = require('./inventoryTransaction.model');
@@ -10,6 +13,7 @@ const {
   normalizeShelf,
   recalculateInventoryTotals,
 } = require('./inventory.utils');
+const { allocateShelfStock } = require('./shelfAllocation');
 
 const MAX_OPTIMISTIC_RETRIES = 5;
 const TRANSACTION_WRITE_RETRIES = 3;
@@ -60,9 +64,7 @@ const inventoryDefaults = (variant) => ({
   variant: variant._id,
   sku: variant.sku,
   shelves: [],
-  reservedShelves: [],
   availableQuantity: 0,
-  reservedQuantity: 0,
   totalQuantity: 0,
   status: 'out_of_stock',
 });
@@ -142,17 +144,8 @@ const syncInventorySku = async (variant) => {
 const copyShelves = (shelves) =>
   shelves.map(({ shelf, quantity }) => ({ shelf, quantity }));
 
-const copyReservedShelves = (reservedShelves = []) =>
-  reservedShelves.map(({ shelf, quantity }) => ({ shelf, quantity }));
-
 const getShelfStock = (inventory, shelf) =>
   inventory.shelves.find((entry) => entry.shelf === shelf);
-
-const getReservedShelfStock = (inventory, shelf) =>
-  (inventory.reservedShelves || []).find((entry) => entry.shelf === shelf);
-
-const getReservedQuantityOnShelf = (inventory, shelf) =>
-  getReservedShelfStock(inventory, shelf)?.quantity || 0;
 
 const addToShelf = (inventory, shelf, quantity) => {
   let shelfStock = getShelfStock(inventory, shelf);
@@ -178,13 +171,10 @@ const removeFromShelf = (inventory, shelf, quantity) => {
     throw new ApiError(409, `Source shelf ${shelf} has no stock for this SKU`);
   }
 
-  const availableOnShelf =
-    shelfStock.quantity - getReservedQuantityOnShelf(inventory, shelf);
-
-  if (availableOnShelf < quantity) {
+  if (shelfStock.quantity < quantity) {
     throw new ApiError(
       409,
-      `Insufficient unreserved stock on shelf ${shelf}. Available: ${availableOnShelf}`,
+      `Insufficient stock on shelf ${shelf}. Available: ${shelfStock.quantity}`,
     );
   }
 
@@ -276,9 +266,7 @@ const restoreInventorySnapshot = async (inventory, snapshot) => {
     {
       $set: {
         shelves: snapshot.shelves,
-        reservedShelves: snapshot.reservedShelves,
         availableQuantity: snapshot.availableQuantity,
-        reservedQuantity: snapshot.reservedQuantity,
         totalQuantity: snapshot.totalQuantity,
         status: snapshot.status,
       },
@@ -295,7 +283,6 @@ const formatInventoryDocument = (inventory) => ({
   variantId: inventory.variant,
   sku: inventory.sku,
   availableQuantity: inventory.availableQuantity,
-  reservedQuantity: inventory.reservedQuantity,
   totalQuantity: inventory.totalQuantity,
   shelves: copyShelves(inventory.shelves),
   status: inventory.status,
@@ -389,9 +376,7 @@ const performAdjustmentUnlocked = async ({
 
     const snapshot = {
       shelves: copyShelves(inventory.shelves),
-      reservedShelves: copyReservedShelves(inventory.reservedShelves),
       availableQuantity: inventory.availableQuantity,
-      reservedQuantity: inventory.reservedQuantity,
       totalQuantity: inventory.totalQuantity,
       status: inventory.status,
     };
@@ -523,6 +508,75 @@ const performAdjustmentUnlocked = async ({
   throw new ApiError(409, 'Inventory was updated concurrently; please retry');
 };
 
+const applyAdjustmentInSession = async ({
+  variant,
+  adjustment,
+  session,
+  performedBy,
+  referenceId,
+  operationKey,
+  note,
+}) => {
+  if (!session?.inTransaction?.()) {
+    throw new ApiError(
+      500,
+      'A caller-owned MongoDB transaction is required for this adjustment',
+    );
+  }
+
+  let inventory = await Inventory.findOne({ variant: variant._id }).session(
+    session,
+  );
+
+  if (!inventory) {
+    [inventory] = await Inventory.create([inventoryDefaults(variant)], {
+      session,
+    });
+  }
+
+  if (inventory.sku !== adjustment.sku || variant.sku !== adjustment.sku) {
+    throw new ApiError(409, 'Inventory and SKU records are out of sync');
+  }
+
+  const previousQuantity = inventory.availableQuantity;
+  applyStockChange(inventory, adjustment);
+  await inventory.save({ session });
+
+  const transactionPayload = {
+    inventory: inventory._id,
+    variant: variant._id,
+    sku: variant.sku,
+    type: adjustment.type,
+    quantity: adjustment.quantity,
+    previousQuantity,
+    newQuantity: inventory.availableQuantity,
+    source: 'import',
+    performedBy,
+    referenceId,
+    operationKey,
+    note,
+  };
+
+  if (adjustment.type === 'ADD') {
+    transactionPayload.toShelf = adjustment.shelf;
+  } else {
+    transactionPayload.fromShelf = adjustment.shelf;
+  }
+  if (adjustment.type === 'TRANSFER') {
+    transactionPayload.toShelf = adjustment.toShelf;
+  }
+
+  const [transaction] = await InventoryTransaction.create(
+    [transactionPayload],
+    { session },
+  );
+
+  return {
+    inventory: formatInventoryDocument(inventory),
+    transaction,
+  };
+};
+
 const normalizeAdjustment = (payload) => {
   if (!payload || typeof payload !== 'object') {
     throw new ApiError(400, 'Inventory adjustment payload is required');
@@ -609,9 +663,6 @@ const adjustInventory = async (payload, context = {}) => {
 const simulateAdjustment = (simulatedInventory, adjustment) => {
   const { shelves } = simulatedInventory;
   const sourceQuantity = shelves.get(adjustment.shelf) || 0;
-  const reservedOnSourceShelf =
-    simulatedInventory.reservedShelves.get(adjustment.shelf) || 0;
-  const availableOnSourceShelf = sourceQuantity - reservedOnSourceShelf;
 
   if (adjustment.type === 'ADD') {
     const nextQuantity = sourceQuantity + adjustment.quantity;
@@ -630,16 +681,8 @@ const simulateAdjustment = (simulatedInventory, adjustment) => {
     return null;
   }
 
-  if (availableOnSourceShelf < adjustment.quantity) {
-    return `Insufficient unreserved stock on shelf ${adjustment.shelf}. Available: ${availableOnSourceShelf}`;
-  }
-
-  if (
-    adjustment.type === 'REMOVE' &&
-    simulatedInventory.totalQuantity - adjustment.quantity <
-      simulatedInventory.reservedQuantity
-  ) {
-    return 'Stock reserved for future order processing cannot be removed';
+  if (sourceQuantity < adjustment.quantity) {
+    return `Insufficient stock on shelf ${adjustment.shelf}. Available: ${sourceQuantity}`;
   }
 
   if (adjustment.type === 'TRANSFER') {
@@ -687,23 +730,14 @@ const validateAdjustmentBatch = async (adjustments) => {
         quantity,
       ]),
     );
-    const reservedShelves = new Map(
-      (inventory?.reservedShelves || []).map(({ shelf, quantity }) => [
-        shelf,
-        quantity,
-      ]),
-    );
-
     simulatedInventories.set(
       variant.sku,
       {
         shelves,
-        reservedShelves,
         totalQuantity: [...shelves.values()].reduce(
           (total, quantity) => total + quantity,
           0,
         ),
-        reservedQuantity: inventory?.reservedQuantity || 0,
       },
     );
   });
@@ -1366,21 +1400,142 @@ const finalizeOrderStock = async (items, context = {}, commit) => {
   });
 };
 
+// Transaction primitive for the future Admin-confirmation workflow. The caller
+// owns the session lifecycle and is solely responsible for commit/abort.
+const deductSkuStock = async ({
+  sku,
+  quantity,
+  session,
+  referenceId,
+  performedBy,
+  note,
+}) => {
+  if (!session || typeof session.inTransaction !== 'function' || !session.inTransaction()) {
+    throw new ApiError(500, 'An active caller-owned MongoDB transaction is required');
+  }
+  if (!Number.isSafeInteger(quantity) || quantity <= 0) {
+    throw new ApiError(400, 'Required Set quantity must be a positive whole number');
+  }
+
+  let normalizedSku;
+  try {
+    normalizedSku = normalizeSku(sku);
+  } catch (error) {
+    throw new ApiError(400, error.message);
+  }
+
+  const inventory = await Inventory.findOne({ sku: normalizedSku }).session(session).lean();
+  if (!inventory) throw new ApiError(404, 'Inventory for SKU not found');
+
+  const allocation = allocateShelfStock(inventory.shelves, quantity);
+  if (!allocation.sufficient) {
+    throw new ApiError(
+      409,
+      `Insufficient stock for SKU ${normalizedSku}. Available: ${allocation.totalAvailable}`,
+    );
+  }
+
+  let runningQuantity = allocation.totalAvailable;
+  const ledgerRecords = [];
+  for (const entry of allocation.allocations) {
+    const update = await Inventory.updateOne(
+      {
+        _id: inventory._id,
+        shelves: {
+          $elemMatch: {
+            shelf: entry.shelf,
+            quantity: { $gte: entry.quantity },
+          },
+        },
+      },
+      {
+        $inc: {
+          'shelves.$[selected].quantity': -entry.quantity,
+          availableQuantity: -entry.quantity,
+          totalQuantity: -entry.quantity,
+          __v: 1,
+        },
+        $set: { updatedAt: new Date() },
+      },
+      {
+        session,
+        arrayFilters: [{ 'selected.shelf': entry.shelf }],
+        runValidators: true,
+      },
+    );
+    if (update.modifiedCount !== 1) {
+      throw new ApiError(409, `Stock changed concurrently for SKU ${normalizedSku}`);
+    }
+
+    const nextQuantity = runningQuantity - entry.quantity;
+    ledgerRecords.push({
+      inventory: inventory._id,
+      variant: inventory.variant,
+      sku: normalizedSku,
+      type: 'ORDER_DEDUCT',
+      quantity: entry.quantity,
+      fromShelf: entry.shelf,
+      previousQuantity: runningQuantity,
+      newQuantity: nextQuantity,
+      source: 'order',
+      referenceId,
+      operationKey: referenceId
+        ? `${referenceId}:ORDER_DEDUCT:${inventory.variant.toString()}:${entry.shelf}`
+        : undefined,
+      performedBy,
+      note,
+    });
+    runningQuantity = nextQuantity;
+  }
+
+  await Inventory.updateOne(
+    { _id: inventory._id },
+    {
+      $pull: { shelves: { quantity: 0 } },
+      $set: {
+        status: runningQuantity > 0 ? 'in_stock' : 'out_of_stock',
+        updatedAt: new Date(),
+      },
+    },
+    { session, runValidators: true },
+  );
+  const transactions = await InventoryTransaction.insertMany(ledgerRecords, {
+    session,
+    ordered: true,
+  });
+
+  return {
+    inventoryId: inventory._id,
+    variantId: inventory.variant,
+    sku: normalizedSku,
+    quantity,
+    allocations: allocation.allocations.map(({ shelf, quantity: deductedQuantity }) => ({
+      shelf,
+      quantity: deductedQuantity,
+    })),
+    remainingQuantity: runningQuantity,
+    transactions,
+  };
+};
+
 const buildInventoryProjection = () => ({
   _id: 0,
   inventoryId: { $ifNull: ['$inventory._id', null] },
   variantId: '$_id',
   productId: '$product._id',
+  productColourId: '$productColour._id',
+  colourId: '$colour._id',
+  sizeSetId: '$sizeSetRef._id',
   categoryId: '$product.category',
   sku: 1,
-  productName: '$product.productName',
-  productCode: '$product.productCode',
-  color: 1,
-  sizeSet: 1,
+  productName: { $ifNull: ['$product.name', '$product.productName'] },
+  productCode: { $ifNull: ['$productColour.productCode', '$product.productCode'] },
+  productColour: 1,
+  colour: 1,
+  sizeSet: { $ifNull: ['$sizeSetRef', '$sizeSet'] },
   variantStatus: '$status',
   totalQuantity: { $ifNull: ['$inventory.totalQuantity', 0] },
   availableQuantity: { $ifNull: ['$inventory.availableQuantity', 0] },
-  reservedQuantity: { $ifNull: ['$inventory.reservedQuantity', 0] },
   shelves: { $ifNull: ['$inventory.shelves', []] },
   status: { $ifNull: ['$inventory.status', 'out_of_stock'] },
   updatedAt: { $ifNull: ['$inventory.updatedAt', '$updatedAt'] },
@@ -1416,6 +1571,33 @@ const listInventory = async ({
       },
     },
     { $unwind: '$product' },
+    {
+      $lookup: {
+        from: ProductColour.collection.name,
+        localField: 'productColour',
+        foreignField: '_id',
+        as: 'productColour',
+      },
+    },
+    { $unwind: { path: '$productColour', preserveNullAndEmptyArrays: true } },
+    {
+      $lookup: {
+        from: Colour.collection.name,
+        localField: 'productColour.colour',
+        foreignField: '_id',
+        as: 'colour',
+      },
+    },
+    { $unwind: { path: '$colour', preserveNullAndEmptyArrays: true } },
+    {
+      $lookup: {
+        from: SizeSet.collection.name,
+        localField: 'sizeSetRef',
+        foreignField: '_id',
+        as: 'sizeSetRef',
+      },
+    },
+    { $unwind: { path: '$sizeSetRef', preserveNullAndEmptyArrays: true } },
   ];
 
   if (category) {
@@ -1436,6 +1618,10 @@ const listInventory = async ({
       $match: {
         $or: [
           { sku: expression },
+          { 'product.name': expression },
+          { 'productColour.productCode': expression },
+          { 'colour.name': expression },
+          { 'sizeSetRef.label': expression },
           { color: expression },
           { sizeSet: expression },
           { 'product.productName': expression },
@@ -1500,20 +1686,24 @@ const listInventory = async ({
 };
 
 const getVariantWithProduct = (filter) =>
-  ProductVariant.findOne(filter).populate({
-    path: 'product',
-    select: '_id productName productCode title category status',
-    populate: {
-      path: 'category',
-      select: '_id name slug status',
-    },
-  });
+  ProductVariant.findOne(filter)
+    .populate({
+      path: 'product',
+      select: '_id name productName productCode description category subCategory fitId fabricId mrpPerPieceMinor status',
+      populate: { path: 'category', select: '_id name slug status' },
+    })
+    .populate({
+      path: 'productColour',
+      populate: { path: 'colour', select: '_id name slug status' },
+    })
+    .populate('sizeSetRef', '_id label sizes pieceCount status');
 
 const formatInventoryDetail = (variant, inventory) => ({
   ...formatInventoryDocument(inventory),
   product: variant.product,
-  color: variant.color,
-  sizeSet: variant.sizeSet,
+  productColour: variant.productColour || null,
+  colour: variant.productColour?.colour || variant.color || null,
+  sizeSet: variant.sizeSetRef || variant.sizeSet,
   variantStatus: variant.status,
 });
 
@@ -1579,26 +1769,30 @@ const listTransactions = async (variantId, { page, limit, type, source }) => {
   };
 };
 
-const importAdjustments = (...args) => {
+const previewImport = (...args) => {
   const inventoryImportService = require('./inventoryImport.service');
-  return inventoryImportService.importAdjustments(...args);
+  return inventoryImportService.previewImport(...args);
+};
+
+const applyImport = (...args) => {
+  const inventoryImportService = require('./inventoryImport.service');
+  return inventoryImportService.applyImport(...args);
 };
 
 module.exports = {
   adjustInventory,
+  applyImport,
+  applyAdjustmentInSession,
+  deductSkuStock,
   applyAdjustmentBatch,
   deleteInventoriesForVariants,
   ensureInventoriesForVariants,
   ensureInventoryForVariant,
-  finalizeOrderStock,
   getInventoryBySku,
   getInventoryByVariantId,
-  importAdjustments,
   listInventory,
   listTransactions,
-  reconcileOrderStock,
-  releaseOrderStock,
-  reserveOrderStock,
+  previewImport,
   syncInventorySku,
   validateAdjustmentBatch,
 };

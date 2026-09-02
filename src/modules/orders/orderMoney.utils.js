@@ -22,33 +22,6 @@ const decimalNumberToFraction = (value) => {
   return { denominator, numerator };
 };
 
-const calculateDiscountedUnitMinor = (basePriceMinor, discountPercent) => {
-  if (!Number.isSafeInteger(basePriceMinor) || basePriceMinor < 0) {
-    throw new RangeError('Base price minor units are outside the supported range');
-  }
-
-  const discount = decimalNumberToFraction(discountPercent);
-  const percentageDenominator = 100n * discount.denominator;
-  const payableNumerator =
-    percentageDenominator - discount.numerator;
-
-  if (payableNumerator < 0n) {
-    throw new RangeError('Discount percent cannot exceed 100');
-  }
-
-  const rawNumerator = BigInt(basePriceMinor) * payableNumerator;
-  const rounded =
-    (rawNumerator + percentageDenominator / 2n) /
-    percentageDenominator;
-
-  if (rounded > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new RangeError('Discounted price is outside the supported range');
-  }
-
-  return Number(rounded);
-};
-
 module.exports = {
-  calculateDiscountedUnitMinor,
   decimalNumberToFraction,
 };

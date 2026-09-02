@@ -11,9 +11,6 @@ const INVENTORY_STATUSES = ['in_stock', 'out_of_stock'];
 const isNonNegativeSafeInteger = (value) =>
   Number.isSafeInteger(value) && value >= 0;
 
-const isPositiveSafeInteger = (value) =>
-  Number.isSafeInteger(value) && value > 0;
-
 const shelfStockSchema = new mongoose.Schema(
   {
     shelf: {
@@ -29,29 +26,6 @@ const shelfStockSchema = new mongoose.Schema(
       validate: {
         validator: isNonNegativeSafeInteger,
         message: 'Shelf quantity must be a non-negative whole number',
-      },
-    },
-  },
-  {
-    _id: false,
-  },
-);
-
-const reservedShelfSchema = new mongoose.Schema(
-  {
-    shelf: {
-      type: String,
-      required: [true, 'Reserved shelf is required'],
-      set: normalizeShelf,
-      maxlength: [100, 'Reserved shelf must not exceed 100 characters'],
-    },
-    quantity: {
-      type: Number,
-      required: true,
-      min: [1, 'Reserved shelf quantity must be greater than zero'],
-      validate: {
-        validator: isPositiveSafeInteger,
-        message: 'Reserved shelf quantity must be a positive whole number',
       },
     },
   },
@@ -83,17 +57,6 @@ const inventorySchema = new mongoose.Schema(
         message: 'An inventory cannot contain duplicate shelf entries',
       },
     },
-    reservedShelves: {
-      type: [reservedShelfSchema],
-      default: [],
-      validate: {
-        validator: (reservedShelves) => {
-          const shelfNames = reservedShelves.map(({ shelf }) => shelf);
-          return new Set(shelfNames).size === shelfNames.length;
-        },
-        message: 'An inventory cannot contain duplicate reserved shelf entries',
-      },
-    },
     availableQuantity: {
       type: Number,
       required: true,
@@ -102,16 +65,6 @@ const inventorySchema = new mongoose.Schema(
       validate: {
         validator: isNonNegativeSafeInteger,
         message: 'Available quantity must be a non-negative whole number',
-      },
-    },
-    reservedQuantity: {
-      type: Number,
-      required: true,
-      default: 0,
-      min: [0, 'Reserved quantity cannot be negative'],
-      validate: {
-        validator: isNonNegativeSafeInteger,
-        message: 'Reserved quantity must be a non-negative whole number',
       },
     },
     totalQuantity: {

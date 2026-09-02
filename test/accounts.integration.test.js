@@ -197,6 +197,7 @@ test(
         {
           name: 'Beta Retail',
           email: 'beta.retail@example.test',
+          phone: '98888-88888',
           discountPercent: 8,
         },
         wholesalerBToken,
@@ -332,6 +333,7 @@ test(
       const duplicateEmail = await createWholesaler({
         name: 'Duplicate Account',
         email: retailerA.email,
+        phone: '97777-77777',
       });
       assert.equal(duplicateEmail.status, 409);
 
@@ -437,23 +439,46 @@ test(
       });
       assert.equal(categoryCreation.status, 201);
 
+      const subCategoryCreation = await request('/subcategories', {
+        method: 'POST', token: adminToken,
+        body: { name: 'Shirts', categoryId: categoryCreation.body.data._id },
+      });
+      const colourCreation = await request('/colours', {
+        method: 'POST', token: adminToken, body: { name: 'Black' },
+      });
+      const fitCreation = await request('/fits', {
+        method: 'POST', token: adminToken, body: { name: 'Regular' },
+      });
+      const fabricCreation = await request('/fabrics', {
+        method: 'POST', token: adminToken, body: { name: 'Cotton' },
+      });
+      const sizeSetCreation = await request('/size-sets', {
+        method: 'POST', token: adminToken,
+        body: { label: '30-38', sizes: ['30', '32', '34', '36', '38'] },
+      });
+
       const productCreation = await request('/products', {
         method: 'POST',
         token: adminToken,
         body: {
-          productName: 'Account Test Shirt',
-          productCode: 'ACCOUNT-TEST',
-          title: 'Account Test Shirt',
+          name: 'Account Test Shirt',
           categoryId: categoryCreation.body.data._id,
-          mrp: 100,
-          colors: [{ color: 'BLACK', sizeSets: ['30-38'] }],
+          subCategoryId: subCategoryCreation.body.data._id,
+          fitId: fitCreation.body.data._id,
+          fabricId: fabricCreation.body.data._id,
+          mrpPerPieceMinor: 10000,
+          productColours: [{
+            colourId: colourCreation.body.data._id,
+            productCode: 'account test',
+            skus: [{ sizeSetId: sizeSetCreation.body.data._id }],
+          }],
         },
       });
       assert.equal(productCreation.status, 201);
 
       const product = productCreation.body.data.product;
-      const variant = productCreation.body.data.variants[0].sizeSets[0];
-      const variantId = variant.variantId;
+      const variant = productCreation.body.data.productColours[0].skus[0];
+      const variantId = variant._id;
       const initializedInventory = await Inventory.findOne({
         variant: variantId,
       }).lean();

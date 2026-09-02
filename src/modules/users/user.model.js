@@ -36,6 +36,15 @@ const userSchema = new mongoose.Schema(
       required: true,
       select: false,
     },
+    passwordResetTokenHash: {
+      type: String,
+      select: false,
+      match: /^[a-f\d]{64}$/,
+    },
+    passwordResetExpiresAt: {
+      type: Date,
+      select: false,
+    },
     role: {
       type: String,
       enum: ['admin', 'wholesaler', 'retailer'],
@@ -102,6 +111,8 @@ const userSchema = new mongoose.Schema(
 
 const removePassword = (doc, returnedObject) => {
   delete returnedObject.password;
+  delete returnedObject.passwordResetTokenHash;
+  delete returnedObject.passwordResetExpiresAt;
   delete returnedObject.__v;
   return returnedObject;
 };

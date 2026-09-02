@@ -1,401 +1,134 @@
-const Product = require('../products/product.model');
-const inventoryService = require('../inventory/inventory.service');
-const ProductVariant = require('./productVariant.model');
+const mongoose = require('mongoose');
 const ApiError = require('../../utils/ApiError');
-const {
-  generateSku,
-  normalizeSku,
-  normalizeSkuPart,
-} = require('../../utils/sku');
+const Inventory = require('../inventory/inventory.model');
+const ProductColour = require('../productColours/productColour.model');
+const Product = require('../products/product.model');
+const SizeSet = require('../sizeSets/sizeSet.model');
+const ProductVariant = require('./productVariant.model');
+const { generateSku, normalizeSku, normalizeSkuPart } = require('../../utils/sku');
 
-const migrationAttributeFields = [
-  'fit',
-  'patternWash',
-  'fabric',
-  'sleeves',
-  'waist',
-];
+const transactionUnsupported = (error) =>
+  error?.code === 20 ||
+  error?.originalError?.code === 20 ||
+  /Transaction numbers are only allowed|does not support retryable writes/.test(error?.message || '');
 
 const mapVariantError = (error) => {
-  if (error instanceof ApiError) {
-    return error;
-  }
-
-  if (error?.name === 'VersionError') {
-    return new ApiError(409, 'Product variant changed concurrently; please retry');
-  }
-
+  if (error instanceof ApiError) return error;
+  if (error?.name === 'VersionError') return new ApiError(409, 'SKU changed concurrently; please retry');
   if (error?.code === 11000) {
-    const keyPattern = error.keyPattern || error.errorResponse?.keyPattern || {};
-
-    if (keyPattern.sku || error.message?.includes('unique_variant_sku')) {
-      return new ApiError(409, 'SKU already exists');
-    }
-
-    return new ApiError(
-      409,
-      'This product, color, and size set combination already exists',
-    );
+    if (error.keyPattern?.sku || error.message?.includes('unique_variant_sku')) return new ApiError(409, 'SKU already exists');
+    return new ApiError(409, 'This SizeSet is already assigned to the ProductColour');
   }
-
   if (error?.name === 'ValidationError') {
-    return new ApiError(
-      400,
-      'Validation failed',
-      Object.values(error.errors).map((validationError) => ({
-        field: validationError.path,
-        message: validationError.message,
-      })),
-    );
+    return new ApiError(400, 'Validation failed', Object.values(error.errors).map((entry) => ({ field: entry.path, message: entry.message })));
   }
-
   return error;
 };
 
 const groupVariants = (variants) => {
-  const groupedByColor = new Map();
-
+  const groups = new Map();
   variants.forEach((variant) => {
-    if (!groupedByColor.has(variant.color)) {
-      groupedByColor.set(variant.color, {
-        color: variant.color,
-        sizeSets: [],
-      });
-    }
-
-    groupedByColor.get(variant.color).sizeSets.push({
-      variantId: variant._id,
-      sizeSet: variant.sizeSet,
-      sku: variant.sku,
-      sourceProductCode: variant.sourceProductCode,
-      attributeOverrides: variant.attributeOverrides,
-      status: variant.status,
-      createdAt: variant.createdAt,
-      updatedAt: variant.updatedAt,
-    });
+    const key = variant.productColour?._id?.toString() || variant.productColour?.toString() || variant.color;
+    if (!groups.has(key)) groups.set(key, variant.productColour ? { productColour: variant.productColour, skus: [] } : { color: variant.color, sizeSets: [] });
+    if (variant.productColour) groups.get(key).skus.push(variant);
+    else groups.get(key).sizeSets.push({ variantId: variant._id, sizeSet: variant.sizeSet, sku: variant.sku, sourceProductCode: variant.sourceProductCode, attributeOverrides: variant.attributeOverrides, status: variant.status, createdAt: variant.createdAt, updatedAt: variant.updatedAt });
   });
-
-  return Array.from(groupedByColor.values());
-};
-
-const ensureVariantAvailable = async ({
-  productId,
-  color,
-  sizeSet,
-  sku,
-  excludeVariantId,
-}) => {
-  const filter = {
-    $or: [
-      { sku },
-      {
-        product: productId,
-        color,
-        sizeSet,
-      },
-    ],
-  };
-
-  if (excludeVariantId) {
-    filter._id = { $ne: excludeVariantId };
-  }
-
-  const conflict = await ProductVariant.findOne(filter)
-    .select('sku color sizeSet')
-    .lean();
-
-  if (!conflict) {
-    return;
-  }
-
-  if (conflict.sku === sku) {
-    throw new ApiError(409, 'SKU already exists');
-  }
-
-  throw new ApiError(
-    409,
-    'This product, color, and size set combination already exists',
-  );
+  return Array.from(groups.values());
 };
 
 const listProductVariants = async (productId, { status }) => {
-  const product = await Product.findById(productId)
-    .select('_id productName productCode title status')
-    .lean();
-
-  if (!product) {
-    throw new ApiError(404, 'Product not found');
-  }
-
+  const product = await Product.findById(productId).select('_id name productName status catalogVersion').lean();
+  if (!product) throw new ApiError(404, 'Product not found');
   const filter = { product: productId };
-
-  if (status) {
-    filter.status = status;
-  }
-
+  if (status) filter.status = status;
   const variants = await ProductVariant.find(filter)
-    .sort({ color: 1, sizeSet: 1, _id: 1 })
+    .populate({ path: 'productColour', populate: { path: 'colour', select: '_id name slug status' } })
+    .populate('sizeSetRef', '_id label sizes pieceCount status')
+    .sort({ createdAt: 1, _id: 1 })
     .lean();
-
-  return {
-    product,
-    variants: groupVariants(variants),
-  };
+  return { product, variants: groupVariants(variants) };
 };
 
-const createVariantInternal = async (
-  productId,
-  payload,
-  { includeMigrationMetadata = false } = {},
-) => {
-  const product = await Product.findById(productId)
-    .select('_id productName status')
-    .lean();
-
-  if (!product) {
-    throw new ApiError(404, 'Product not found');
-  }
-
-  if (product.status !== 'active') {
-    throw new ApiError(409, 'Variants cannot be added to an inactive product');
-  }
-
-  const color = normalizeSkuPart(payload.color, 'Color');
-  const sizeSet = normalizeSkuPart(payload.sizeSet, 'Size set');
-  const sku = payload.sku
-    ? normalizeSku(payload.sku)
-    : generateSku(product.productName, color, sizeSet);
-
-  await ProductVariant.init();
-  await ensureVariantAvailable({ productId, color, sizeSet, sku });
-
+const createVariant = async (productId, payload) => {
+  const [product, productColour, sizeSet] = await Promise.all([
+    Product.findOne({ _id: productId, catalogVersion: 2, status: 'active' }).select('_id').lean(),
+    ProductColour.findOne({ _id: payload.productColourId, product: productId, status: 'active' }).select('_id product productCode').lean(),
+    SizeSet.findOne({ _id: payload.sizeSetId, status: 'active' }).select('_id label').lean(),
+  ]);
+  if (!product) throw new ApiError(404, 'Active finalized Product not found');
+  if (!productColour) throw new ApiError(404, 'Active ProductColour for the Product not found');
+  if (!sizeSet) throw new ApiError(404, 'Active SizeSet not found');
+  const sku = payload.sku ? normalizeSku(payload.sku) : generateSku(productColour.productCode, sizeSet.label);
+  await Promise.all([ProductVariant.init(), Inventory.init()]);
+  const session = await mongoose.startSession();
   let variant;
-
-  try {
-    const variantPayload = {
+  const write = async (transactionSession) => {
+    [variant] = await ProductVariant.create([{
+      catalogVersion: 2,
       product: productId,
-      color,
-      sizeSet,
+      productColour: productColour._id,
+      sizeSetRef: sizeSet._id,
       sku,
       status: payload.status || 'active',
-    };
-
-    if (includeMigrationMetadata) {
-      if (payload.sourceProductCode) {
-        variantPayload.sourceProductCode = normalizeSku(
-          payload.sourceProductCode,
-        );
-      }
-
-      const attributeOverrides = {};
-
-      migrationAttributeFields.forEach((field) => {
-        if (payload.attributeOverrides?.[field]) {
-          attributeOverrides[field] = payload.attributeOverrides[field].trim();
-        }
-      });
-
-      if (Object.keys(attributeOverrides).length > 0) {
-        variantPayload.attributeOverrides = attributeOverrides;
-      }
-    }
-
-    variant = await ProductVariant.create(variantPayload);
-    await inventoryService.ensureInventoryForVariant(variant);
-    return variant;
-  } catch (error) {
-    if (variant) {
-      try {
-        await inventoryService.deleteInventoriesForVariants([variant._id]);
-        await ProductVariant.deleteOne({ _id: variant._id });
-      } catch (cleanupError) {
-        await ProductVariant.updateOne(
-          { _id: variant._id },
-          { $set: { status: 'inactive' } },
-        ).catch(() => undefined);
-        console.error(
-          `Variant creation cleanup requires review for ${variant._id.toString()}`,
-        );
-        throw new ApiError(
-          500,
-          'Variant creation failed and cleanup could not complete safely',
-        );
-      }
-    }
-
-    throw mapVariantError(error);
-  }
-};
-
-const createVariant = (productId, payload) =>
-  createVariantInternal(productId, payload);
-
-const createVariantForMigration = (productId, payload) =>
-  createVariantInternal(productId, payload, {
-    includeMigrationMetadata: true,
-  });
-
-const enrichVariantForMigration = async (variantId, payload) => {
-  const variant = await ProductVariant.findById(variantId);
-
-  if (!variant) {
-    throw new ApiError(404, 'Product variant not found');
-  }
-
-  if (payload.sourceProductCode) {
-    const sourceProductCode = normalizeSku(payload.sourceProductCode);
-
-    if (
-      variant.sourceProductCode &&
-      variant.sourceProductCode !== sourceProductCode
-    ) {
-      throw new ApiError(
-        409,
-        'Existing variant has a different source product code',
-      );
-    }
-
-    if (!variant.sourceProductCode) {
-      variant.sourceProductCode = sourceProductCode;
-    }
-  }
-
-  migrationAttributeFields.forEach((field) => {
-    const nextValue = payload.attributeOverrides?.[field]?.trim();
-
-    if (!nextValue) {
-      return;
-    }
-
-    const currentValue = variant.attributeOverrides?.[field];
-
-    if (currentValue && currentValue !== nextValue) {
-      throw new ApiError(
-        409,
-        `Existing variant has a different ${field} override`,
-      );
-    }
-
-    if (!currentValue) {
-      variant.set(`attributeOverrides.${field}`, nextValue);
-    }
-  });
-
+    }], transactionSession ? { session: transactionSession } : undefined);
+    await Inventory.create([{
+      variant: variant._id,
+      sku: variant.sku,
+      shelves: [],
+      availableQuantity: 0,
+      totalQuantity: 0,
+      status: 'out_of_stock',
+    }], transactionSession ? { session: transactionSession } : undefined);
+  };
   try {
-    await variant.save();
-    return variant;
-  } catch (error) {
-    throw mapVariantError(error);
-  }
+    try { await session.withTransaction(() => write(session)); }
+    catch (error) {
+      const unsupported = transactionUnsupported(error);
+      if (!(process.env.NODE_ENV === 'test' && unsupported)) throw error;
+      try { await write(null); }
+      catch (fallbackError) {
+        if (variant?._id) {
+          await Inventory.deleteOne({ variant: variant._id });
+          await ProductVariant.deleteOne({ _id: variant._id });
+        }
+        throw fallbackError;
+      }
+    }
+    return await ProductVariant.findById(variant._id).populate('productColour').populate('sizeSetRef').lean();
+  } catch (error) { throw mapVariantError(error); }
+  finally { await session.endSession(); }
 };
 
 const updateVariant = async (variantId, payload) => {
   const variant = await ProductVariant.findById(variantId);
+  if (!variant) throw new ApiError(404, 'SKU not found');
+  variant.status = payload.status;
+  try { return await variant.save(); } catch (error) { throw mapVariantError(error); }
+};
 
-  if (!variant) {
-    throw new ApiError(404, 'Product variant not found');
-  }
+const deactivateVariant = (variantId) => updateVariant(variantId, { status: 'inactive' });
 
-  const product = await Product.findById(variant.product)
-    .select('_id productName')
-    .lean();
-
-  if (!product) {
-    throw new ApiError(404, 'Parent product not found');
-  }
-
-  const color = payload.color
-    ? normalizeSkuPart(payload.color, 'Color')
-    : variant.color;
-  const sizeSet = payload.sizeSet
-    ? normalizeSkuPart(payload.sizeSet, 'Size set')
-    : variant.sizeSet;
-
-  let sku = variant.sku;
-
-  if (payload.sku) {
-    sku = normalizeSku(payload.sku);
-  } else if (payload.color || payload.sizeSet) {
-    sku = generateSku(product.productName, color, sizeSet);
-  }
-
-  await ensureVariantAvailable({
-    productId: variant.product,
-    color,
-    sizeSet,
-    sku,
-    excludeVariantId: variantId,
-  });
-
-  const originalValues = {
-    color: variant.get('color', null, { getters: false }),
-    sizeSet: variant.get('sizeSet', null, { getters: false }),
-    sku: variant.get('sku', null, { getters: false }),
-    status: variant.get('status', null, { getters: false }),
-  };
-
-  variant.color = color;
-  variant.sizeSet = sizeSet;
-  variant.sku = sku;
-
-  if (payload.status) {
-    variant.status = payload.status;
-  }
-
-  let variantSaved = false;
-
+// Legacy migration helpers remain isolated from finalized API writes.
+const createVariantForMigration = async (productId, payload) => {
   try {
-    await variant.save();
-    variantSaved = true;
-    await inventoryService.syncInventorySku(variant);
-    return variant;
-  } catch (error) {
-    if (variantSaved) {
-      try {
-        variant.set(originalValues);
-        await variant.save();
-        await inventoryService.syncInventorySku(variant);
-      } catch (rollbackError) {
-        console.error(
-          `Variant update rollback requires review for ${variant._id.toString()}`,
-        );
-        throw new ApiError(
-          500,
-          'Variant update failed and rollback could not complete safely',
-        );
-      }
-    }
-
-    throw mapVariantError(error);
-  }
+    return await ProductVariant.create({
+      product: productId,
+      color: normalizeSkuPart(payload.color, 'Color'),
+      sizeSet: normalizeSkuPart(payload.sizeSet, 'Size set'),
+      sku: normalizeSku(payload.sku),
+      sourceProductCode: payload.sourceProductCode ? normalizeSku(payload.sourceProductCode) : undefined,
+      attributeOverrides: payload.attributeOverrides,
+      status: payload.status || 'active',
+    });
+  } catch (error) { throw mapVariantError(error); }
 };
 
-const deactivateVariant = async (variantId) => {
+const enrichVariantForMigration = async (variantId, payload) => {
   const variant = await ProductVariant.findById(variantId);
-
-  if (!variant) {
-    throw new ApiError(404, 'Product variant not found');
-  }
-
-  if (variant.status !== 'inactive') {
-    variant.status = 'inactive';
-
-    try {
-      await variant.save();
-    } catch (error) {
-      throw mapVariantError(error);
-    }
-  }
-
-  return variant;
+  if (!variant) throw new ApiError(404, 'Product variant not found');
+  if (payload.sourceProductCode && !variant.sourceProductCode) variant.sourceProductCode = normalizeSku(payload.sourceProductCode);
+  if (payload.attributeOverrides) variant.attributeOverrides = { ...(variant.attributeOverrides?.toObject?.() || variant.attributeOverrides || {}), ...payload.attributeOverrides };
+  try { return await variant.save(); } catch (error) { throw mapVariantError(error); }
 };
 
-module.exports = {
-  createVariant,
-  createVariantForMigration,
-  deactivateVariant,
-  enrichVariantForMigration,
-  groupVariants,
-  listProductVariants,
-  updateVariant,
-};
+module.exports = { createVariant, createVariantForMigration, deactivateVariant, enrichVariantForMigration, groupVariants, listProductVariants, updateVariant };

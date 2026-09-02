@@ -21,7 +21,7 @@ const createRetailerBodySchema = z
   .object({
     name: nameSchema,
     email: emailSchema,
-    phone: phoneSchema.optional(),
+    phone: phoneSchema,
     discountPercent: discountPercentSchema.optional(),
   })
   .strict();

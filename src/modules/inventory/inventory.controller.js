@@ -58,37 +58,28 @@ const listTransactions = asyncHandler(async (req, res) => {
     );
 });
 
-const importAdjustments = asyncHandler(async (req, res) => {
-  const result = await inventoryService.importAdjustments(req.file.buffer, {
-    source: 'import',
+const previewImport = asyncHandler(async (req, res) => {
+  const data = await inventoryService.previewImport(req.file.buffer, {
     performedBy: req.user._id,
     originalName: req.file.originalname,
   });
+  return res.status(201).json(new ApiResponse(201, data, 'Inventory import preview created'));
+});
 
-  if (result?.success === false) {
-    return res.status(result.statusCode || 400).json({
-      success: false,
-      message:
-        result.message ||
-        'Inventory adjustment file contains validation errors',
-      data: result.data || null,
-    });
-  }
-
-  const statusCode = result?.statusCode || 200;
-  const message =
-    result?.message || 'Inventory adjustments imported successfully';
-  const data =
-    result?.success === true ? (result.data ?? null) : (result ?? null);
-
-  return res.status(statusCode).json(new ApiResponse(statusCode, data, message));
+const applyImport = asyncHandler(async (req, res) => {
+  const data = await inventoryService.applyImport(
+    req.validated.params.id,
+    { performedBy: req.user._id },
+  );
+  return res.status(200).json(new ApiResponse(200, data, 'Inventory import applied successfully'));
 });
 
 module.exports = {
   adjustInventory,
   getInventoryBySku,
   getInventoryByVariantId,
-  importAdjustments,
+  applyImport,
   listInventory,
   listTransactions,
+  previewImport,
 };

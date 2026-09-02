@@ -199,22 +199,20 @@ test('inventory APIs keep shelf stock and transaction history consistent', {
       parentWholesaler: wholesaler._id,
     });
 
-    const productResult = await productService.createProduct({
+    const productResult = await productService.createProductForMigration({
       productName: 'ABC',
       title: 'Inventory Test Product',
       categoryId: category._id.toString(),
       mrp: 100,
-      colors: [{ color: 'BLACK', sizeSets: ['30-38'] }],
-    });
+    }, [{ color: 'BLACK', sizeSet: '30-38', sku: 'ABC_BLACK_30-38' }]);
     const variant = productResult.variants[0].sizeSets[0];
     const variantId = variant.variantId.toString();
 
-    assert.equal(variant.sku, 'ABC_BLACK_30-38');
+    assert.equal(variant.sku, 'abc_black_30-38');
 
     const zeroInventory = await Inventory.findOne({ variant: variantId }).lean();
     assert.ok(zeroInventory, 'product creation should initialize inventory');
     assert.equal(zeroInventory.availableQuantity, 0);
-    assert.equal(zeroInventory.reservedQuantity, 0);
 
     server = app.listen(0, '127.0.0.1');
     await new Promise((resolve, reject) => {
@@ -260,7 +258,7 @@ test('inventory APIs keep shelf stock and transaction history consistent', {
     });
     assert.equal(retailerAccess.status, 403);
 
-    const unauthenticatedImport = await request('/inventory/import-adjustments', {
+    const unauthenticatedImport = await request('/inventory/imports/preview', {
       method: 'POST',
     });
     assert.equal(unauthenticatedImport.status, 401);
@@ -330,28 +328,8 @@ test('inventory APIs keep shelf stock and transaction history consistent', {
         body: JSON.stringify({ color: 'NAVY', sizeSet: '30-38' }),
       },
     );
-    assert.equal(addedVariant.status, 201);
-
-    const addedVariantId = addedVariant.body.data._id;
-    const addedVariantInventory = await Inventory.findOne({
-      variant: addedVariantId,
-    }).lean();
-    assert.equal(addedVariantInventory.availableQuantity, 0);
-
-    const renamedVariant = await request(`/variants/${addedVariantId}`, {
-      method: 'PATCH',
-      headers: {
-        Authorization: authorization,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ sku: 'ABC_NAVY_CUSTOM' }),
-    });
-    assert.equal(renamedVariant.status, 200);
-
-    const renamedInventory = await Inventory.findOne({
-      variant: addedVariantId,
-    }).lean();
-    assert.equal(renamedInventory.sku, 'ABC_NAVY_CUSTOM');
+    assert.equal(addedVariant.status, 400);
+    assert.equal(await Inventory.countDocuments({}), 1);
 
     let history = await request(`/inventory/${variantId}/transactions`, {
       headers: { Authorization: authorization },
@@ -430,88 +408,11 @@ test('inventory APIs keep shelf stock and transaction history consistent', {
     assert.equal(afterCompensation.availableQuantity, 12);
     assert.equal(await InventoryTransaction.countDocuments(), 4);
 
-    const headers = [
-      'SKU',
-      'QTY',
-      'SHELF',
-      'ADJUSTMENT TYPE',
-      'TO SHELF',
-    ];
-    const validWorkbook = createXlsx([
-      headers,
-      [variant.sku, 2, 'C4', 'ADD', ''],
-      [variant.sku, 1, 'A1', 'REMOVE', ''],
-      [variant.sku, 2, 'B2', 'TRANSFER', 'C4'],
-    ]);
-    const validForm = new FormData();
-    validForm.append(
-      'file',
-      new Blob([validWorkbook], { type: XLSX_MIME_TYPE }),
-      'valid-adjustments.xlsx',
-    );
-    const validImport = await request('/inventory/import-adjustments', {
-      method: 'POST',
-      headers: { Authorization: authorization },
-      body: validForm,
-    });
-    assert.equal(validImport.status, 200, JSON.stringify(validImport.body));
-    assert.deepEqual(
-      {
-        totalRows: validImport.body.data.totalRows,
-        processedRows: validImport.body.data.processedRows,
-        addCount: validImport.body.data.addCount,
-        removeCount: validImport.body.data.removeCount,
-        transferCount: validImport.body.data.transferCount,
-      },
-      {
-        totalRows: 3,
-        processedRows: 3,
-        addCount: 1,
-        removeCount: 1,
-        transferCount: 1,
-      },
-    );
-
-    const afterValidImport = await Inventory.findOne({ variant: variantId }).lean();
-    assert.equal(afterValidImport.availableQuantity, 13);
-    assert.deepEqual(afterValidImport.shelves, [
-      { shelf: 'A1', quantity: 5 },
-      { shelf: 'B2', quantity: 4 },
-      { shelf: 'C4', quantity: 4 },
-    ]);
-
-    const invalidWorkbook = createXlsx([
-      headers,
-      [variant.sku, 3, 'Y1', 'ADD', ''],
-      ['UNKNOWN_SKU', 5, 'Z9', 'ADD', ''],
-    ]);
-    const invalidForm = new FormData();
-    invalidForm.append(
-      'file',
-      new Blob([invalidWorkbook], { type: XLSX_MIME_TYPE }),
-      'invalid-adjustments.xlsx',
-    );
-    const invalidImport = await request('/inventory/import-adjustments', {
-      method: 'POST',
-      headers: { Authorization: authorization },
-      body: invalidForm,
-    });
-    assert.equal(invalidImport.status, 400);
-    assert.equal(invalidImport.body.success, false);
-    assert.equal(invalidImport.body.data.totalRows, 2);
-    assert.equal(invalidImport.body.data.validRows, 1);
-    assert.equal(invalidImport.body.data.invalidRows, 1);
-    assert.equal(invalidImport.body.data.errors[0].message, 'SKU not found');
-
-    const finalInventory = await Inventory.findOne({ variant: variantId }).lean();
-    assert.equal(finalInventory.availableQuantity, 13);
-    assert.deepEqual(finalInventory.shelves, afterValidImport.shelves);
-
     history = await request(`/inventory/${variantId}/transactions`, {
       headers: { Authorization: authorization },
     });
-    assert.equal(history.body.data.pagination.total, 7);
-    assert.equal(await InventoryTransaction.countDocuments(), 7);
+    assert.equal(history.body.data.pagination.total, 4);
+    assert.equal(await InventoryTransaction.countDocuments(), 4);
   } finally {
     if (server) {
       await closeServer(server);

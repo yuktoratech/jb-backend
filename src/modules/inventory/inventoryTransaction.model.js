@@ -7,8 +7,6 @@ const TRANSACTION_TYPES = [
   'ADD',
   'REMOVE',
   'TRANSFER',
-  'ORDER_RESERVE',
-  'ORDER_RELEASE',
   'ORDER_DEDUCT',
   'MANUAL_ADJUSTMENT',
 ];
@@ -122,14 +120,9 @@ inventoryTransactionSchema.pre(
     const requiresSourceShelf = [
       'REMOVE',
       'TRANSFER',
-      'ORDER_RESERVE',
       'ORDER_DEDUCT',
     ].includes(this.type);
-    const requiresDestinationShelf = [
-      'ADD',
-      'TRANSFER',
-      'ORDER_RELEASE',
-    ].includes(this.type);
+    const requiresDestinationShelf = ['ADD', 'TRANSFER'].includes(this.type);
 
     if (requiresSourceShelf && !this.fromShelf) {
       this.invalidate(

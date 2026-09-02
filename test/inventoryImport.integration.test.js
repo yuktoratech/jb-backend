@@ -1,0 +1,116 @@
+const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const { test } = require('node:test');
+const mongoose = require('mongoose');
+
+process.env.NODE_ENV = 'test';
+process.env.JWT_SECRET = crypto.randomBytes(48).toString('hex');
+const URI = process.env.INVENTORY_IMPORT_TEST_MONGODB_URI;
+const Category = require('../src/modules/categories/category.model');
+const Colour = require('../src/modules/colours/colour.model');
+const Fabric = require('../src/modules/fabrics/fabric.model');
+const Fit = require('../src/modules/fits/fit.model');
+const ImportBatch = require('../src/modules/inventory/importBatch.model');
+const Inventory = require('../src/modules/inventory/inventory.model');
+const Ledger = require('../src/modules/inventory/inventoryTransaction.model');
+const service = require('../src/modules/inventory/inventoryImport.service');
+const Product = require('../src/modules/products/product.model');
+const ProductColour = require('../src/modules/productColours/productColour.model');
+const SizeSet = require('../src/modules/sizeSets/sizeSet.model');
+const SubCategory = require('../src/modules/subcategories/subCategory.model');
+const User = require('../src/modules/users/user.model');
+const Variant = require('../src/modules/variants/productVariant.model');
+const xlsx = require('./xlsxTestHelper');
+
+const HEADERS = ['SKU', 'TYPE', 'QUANTITY', 'SHELF', 'TO SHELF'];
+const workbook = (...rows) => xlsx([HEADERS, ...rows]);
+
+test('Inventory Excel preview and atomic apply workflow', { timeout: 120000, skip: !URI && 'INVENTORY_IMPORT_TEST_MONGODB_URI replica-set URI is required' }, async (t) => {
+  await mongoose.connect(URI);
+  try {
+    assert.ok((await mongoose.connection.db.admin().command({ hello: 1 })).setName);
+    await mongoose.connection.dropDatabase();
+    const admin = await User.create({ name: 'Import Admin', email: 'import@example.test', password: 'Import-Test-1!', role: 'admin', status: 'active' });
+    const category = await Category.create({ name: 'Import Category', slug: 'import-category', status: 'active' });
+    const subCategory = await SubCategory.create({ category: category._id, name: 'Import Sub', slug: 'import-sub', status: 'active' });
+    const [fit, fabric, black, blue, set] = await Promise.all([
+      Fit.create({ name: 'Import Fit', slug: 'import-fit' }), Fabric.create({ name: 'Import Fabric', slug: 'import-fabric' }),
+      Colour.create({ name: 'Black', slug: 'import-black' }), Colour.create({ name: 'Blue', slug: 'import-blue' }),
+      SizeSet.create({ label: 'S-XL', sizes: ['S', 'M', 'L', 'XL'] }),
+    ]);
+    const product = await Product.create({ catalogVersion: 2, name: 'Import Product', category: category._id, subCategory: subCategory._id, fitId: fit._id, fabricId: fabric._id, mrpPerPieceMinor: 10000 });
+    const [blackPc, bluePc] = await ProductColour.create([
+      { product: product._id, colour: black._id, productCode: 'import_black' },
+      { product: product._id, colour: blue._id, productCode: 'import_blue' },
+    ]);
+    const blackSku = await Variant.create({ catalogVersion: 2, product: product._id, productColour: blackPc._id, sizeSetRef: set._id, sku: 'import_black_s-xl' });
+    await Inventory.create({ variant: blackSku._id, sku: blackSku.sku, shelves: [{ shelf: 'A', quantity: 10 }] });
+    const context = { performedBy: admin._id, originalName: 'stock.xlsx' };
+    const preview = (buffer) => service.previewImport(buffer, context);
+    const stock = async (variant = blackSku) => (await Inventory.findOne({ variant: variant._id }).lean()).shelves.map(({ shelf, quantity }) => ({ shelf, quantity }));
+
+    await t.test('preview writes only ImportBatch and valid ADD applies with ledger', async () => {
+      const before = await stock();
+      const batch = await preview(workbook([blackSku.sku.toUpperCase(), 'ADD', 2, 'B', '']));
+      assert.equal(batch.status, 'VALID'); assert.deepEqual(await stock(), before); assert.equal(await Ledger.countDocuments(), 0);
+      await service.applyImport(batch.id, { performedBy: admin._id });
+      assert.deepEqual(await stock(), [{ shelf: 'A', quantity: 10 }, { shelf: 'B', quantity: 2 }]);
+      assert.equal(await Ledger.countDocuments({ type: 'ADD', referenceId: `IMPORT:${batch.id}` }), 1);
+      assert.equal((await ImportBatch.findById(batch.id)).status, 'APPLIED');
+      await assert.rejects(service.applyImport(batch.id, { performedBy: admin._id }), /already been applied/);
+    });
+
+    await t.test('REMOVE and TRANSFER revalidate and apply adjustments', async () => {
+      const remove = await preview(workbook([blackSku.sku, 'REMOVE', 3, 'A', '']));
+      await service.applyImport(remove.id, { performedBy: admin._id });
+      const transfer = await preview(workbook([blackSku.sku, 'TRANSFER', 2, 'A', 'C']));
+      await service.applyImport(transfer.id, { performedBy: admin._id });
+      assert.deepEqual(await stock(), [{ shelf: 'A', quantity: 5 }, { shelf: 'B', quantity: 2 }, { shelf: 'C', quantity: 2 }]);
+      assert.equal(await Ledger.countDocuments({ type: { $in: ['REMOVE', 'TRANSFER'] } }), 2);
+    });
+
+    await t.test('row and header validation rejects duplicates, bad quantities, shelves, and stock', async () => {
+      const duplicate = await preview(workbook([blackSku.sku, 'ADD', 1, 'A', ''], [blackSku.sku.toUpperCase(), 'REMOVE', 1, 'A', '']));
+      assert.equal(duplicate.status, 'INVALID'); assert.equal(duplicate.invalidRows, 2); assert.ok(duplicate.errors.every((e) => e.code === 'DUPLICATE_SKU'));
+      const bad = await preview(workbook([blackSku.sku, 'TRANSFER', 0, 'A', 'A']));
+      assert.equal(bad.status, 'INVALID'); assert.deepEqual(new Set(bad.errors.map((e) => e.code)), new Set(['INVALID_QUANTITY', 'SAME_SHELF']));
+      const insufficient = await preview(workbook([blackSku.sku, 'REMOVE', 999, 'A', '']));
+      assert.equal(insufficient.errors[0].code, 'INSUFFICIENT_STOCK');
+      const missingHeader = await preview(xlsx([['SKU', 'TYPE', 'QUANTITY', 'SHELF'], [blackSku.sku, 'ADD', 1, 'A']]));
+      assert.equal(missingHeader.errors[0].code, 'MISSING_COLUMN');
+    });
+
+    await t.test('stale stock blocks apply without partial writes', async () => {
+      const batch = await preview(workbook([blackSku.sku, 'REMOVE', 5, 'A', '']));
+      await Inventory.updateOne({ variant: blackSku._id }, { $set: { shelves: [{ shelf: 'A', quantity: 1 }], availableQuantity: 1, totalQuantity: 1 } });
+      const beforeLedger = await Ledger.countDocuments();
+      await assert.rejects(service.applyImport(batch.id, { performedBy: admin._id }), /Preview is stale/);
+      assert.deepEqual(await stock(), [{ shelf: 'A', quantity: 1 }]); assert.equal(await Ledger.countDocuments(), beforeLedger);
+      assert.equal((await ImportBatch.findById(batch.id)).status, 'VALID');
+    });
+
+    await t.test('later-row failure rolls back inventory, ledger, and batch', async () => {
+      await Inventory.updateOne({ variant: blackSku._id }, { $set: { shelves: [{ shelf: 'A', quantity: 5 }], availableQuantity: 5, totalQuantity: 5 } });
+      const blueVariant = await Variant.create({ catalogVersion: 2, product: product._id, productColour: bluePc._id, sizeSetRef: set._id, sku: 'import_blue_s-xl' });
+      await Inventory.create({ variant: blueVariant._id, sku: blueVariant.sku, shelves: [] });
+      const batch = await preview(workbook([blackSku.sku, 'ADD', 1, 'A', ''], [blueVariant.sku, 'ADD', 1, 'B', '']));
+      const ledgers = await Ledger.countDocuments();
+      await assert.rejects(service.applyImport(batch.id, { performedBy: admin._id, afterRowApplied: ({ index }) => { if (index === 1) throw new Error('injected later-row failure'); } }), /injected later-row failure/);
+      assert.deepEqual(await stock(), [{ shelf: 'A', quantity: 5 }]); assert.deepEqual(await stock(blueVariant), []);
+      assert.equal(await Ledger.countDocuments(), ledgers); assert.equal((await ImportBatch.findById(batch.id)).status, 'VALID');
+    });
+
+    await t.test('missing SKU is created only from existing ProductColour and SizeSet', async () => {
+      await Variant.deleteOne({ sku: 'import_blue_s-xl' }); await Inventory.deleteOne({ sku: 'import_blue_s-xl' });
+      const counts = { products: await Product.countDocuments(), colours: await Colour.countDocuments() };
+      const batch = await preview(workbook(['IMPORT BLUE S-XL', 'ADD', 4, 'Z', '']));
+      assert.equal(batch.status, 'VALID'); assert.equal(batch.rows[0].resolution, 'CREATE_SKU');
+      await service.applyImport(batch.id, { performedBy: admin._id });
+      const created = await Variant.findOne({ sku: 'import_blue_s-xl' }); assert.ok(created);
+      assert.deepEqual(await stock(created), [{ shelf: 'Z', quantity: 4 }]);
+      assert.equal(await Product.countDocuments(), counts.products); assert.equal(await Colour.countDocuments(), counts.colours);
+      const unknown = await preview(workbook(['unknown_s-xl', 'ADD', 1, 'A', '']));
+      assert.equal(unknown.status, 'INVALID'); assert.match(unknown.errors[0].message, /ProductColour could not be resolved/);
+    });
+  } finally { await mongoose.disconnect(); }
+});

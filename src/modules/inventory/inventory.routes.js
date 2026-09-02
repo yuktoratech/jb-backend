@@ -9,6 +9,7 @@ const {
   adjustInventorySchema,
   inventoryBySkuSchema,
   inventoryByVariantSchema,
+  importBatchSchema,
   listInventorySchema,
   listTransactionsSchema,
 } = require('./inventory.validation');
@@ -30,9 +31,15 @@ router.post(
 );
 
 router.post(
-  '/import-adjustments',
+  '/imports/preview',
   uploadInventoryAdjustments,
-  inventoryController.importAdjustments,
+  inventoryController.previewImport,
+);
+
+router.post(
+  '/imports/:id/apply',
+  validate(importBatchSchema),
+  inventoryController.applyImport,
 );
 
 router.get(

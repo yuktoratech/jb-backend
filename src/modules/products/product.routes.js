@@ -15,22 +15,22 @@ const {
 
 const router = express.Router();
 
-router.use(authenticate, authorize('admin'));
+router.use(authenticate);
 
 router
   .route('/')
-  .get(validate(listProductsSchema), productController.listProducts)
-  .post(validate(createProductSchema), productController.createProduct);
+  .get(authorize('admin', 'wholesaler', 'retailer'), validate(listProductsSchema), productController.listProducts)
+  .post(authorize('admin'), validate(createProductSchema), productController.createProduct);
 
 router
   .route('/:id/variants')
-  .get(validate(listVariantsSchema), productController.listProductVariants)
-  .post(validate(createVariantSchema), productController.createVariant);
+  .get(authorize('admin', 'wholesaler', 'retailer'), validate(listVariantsSchema), productController.listProductVariants)
+  .post(authorize('admin'), validate(createVariantSchema), productController.createVariant);
 
 router
   .route('/:id')
-  .get(validate(productIdSchema), productController.getProduct)
-  .patch(validate(updateProductSchema), productController.updateProduct)
-  .delete(validate(productIdSchema), productController.deleteProduct);
+  .get(authorize('admin', 'wholesaler', 'retailer'), validate(productIdSchema), productController.getProduct)
+  .patch(authorize('admin'), validate(updateProductSchema), productController.updateProduct)
+  .delete(authorize('admin'), validate(productIdSchema), productController.deleteProduct);
 
 module.exports = router;

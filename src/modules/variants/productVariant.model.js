@@ -1,100 +1,81 @@
 const mongoose = require('mongoose');
+const { normalizeSku } = require('../../utils/sku');
 
-const {
-  normalizeSku,
-  normalizeSkuPart,
-} = require('../../utils/sku');
-
-const VARIANT_STATUSES = ['active', 'inactive'];
-const SOURCE_PRODUCT_CODE_PATTERN = /^[A-Z0-9]+(?:[-_][A-Z0-9]+)*$/;
-
-const variantAttributeOverridesSchema = new mongoose.Schema(
+const legacyOverridesSchema = new mongoose.Schema(
   {
-    fit: { type: String, trim: true, maxlength: 200 },
-    patternWash: { type: String, trim: true, maxlength: 200 },
-    fabric: { type: String, trim: true, maxlength: 200 },
-    sleeves: { type: String, trim: true, maxlength: 200 },
-    waist: { type: String, trim: true, maxlength: 100 },
+    fit: { type: String, trim: true },
+    patternWash: { type: String, trim: true },
+    fabric: { type: String, trim: true },
+    sleeves: { type: String, trim: true },
+    waist: { type: String, trim: true },
   },
   { _id: false },
 );
 
 const productVariantSchema = new mongoose.Schema(
   {
+    catalogVersion: { type: Number, enum: [2] },
     product: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Product',
       required: true,
+      immutable: true,
       index: true,
     },
-    color: {
-      type: String,
-      required: true,
-      set: (value) => normalizeSkuPart(value, 'Color'),
+    productColour: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'ProductColour',
+      required() { return this.catalogVersion === 2; },
+      immutable: true,
+      index: true,
     },
-    sizeSet: {
-      type: String,
-      required: true,
-      set: (value) => normalizeSkuPart(value, 'Size set'),
+    sizeSetRef: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'SizeSet',
+      required() { return this.catalogVersion === 2; },
+      immutable: true,
+      index: true,
     },
     sku: {
       type: String,
       required: true,
+      immutable: true,
       set: normalizeSku,
-    },
-    sourceProductCode: {
-      type: String,
-      set: normalizeSku,
-      maxlength: [100, 'Source product code must not exceed 100 characters'],
-      validate: {
-        validator: (value) =>
-          value === undefined || SOURCE_PRODUCT_CODE_PATTERN.test(value),
-        message:
-          'Source product code may contain only letters, numbers, hyphens, and underscores',
-      },
-    },
-    attributeOverrides: {
-      type: variantAttributeOverridesSchema,
-      default: undefined,
+      maxlength: 255,
+      match: /^[a-z0-9]+(?:[a-z0-9_-]*[a-z0-9])?$/,
     },
     status: {
       type: String,
-      enum: VARIANT_STATUSES,
+      enum: ['active', 'inactive'],
       default: 'active',
       required: true,
       index: true,
     },
+
+    // Legacy fields remain available until migration validation is complete.
+    color: { type: String, trim: true },
+    sizeSet: { type: String, trim: true },
+    sourceProductCode: { type: String, trim: true },
+    attributeOverrides: { type: legacyOverridesSchema, default: undefined },
   },
-  {
-    timestamps: true,
-    optimisticConcurrency: true,
-  },
+  { timestamps: true, optimisticConcurrency: true },
 );
 
+productVariantSchema.index({ sku: 1 }, { unique: true, name: 'unique_variant_sku' });
 productVariantSchema.index(
-  { sku: 1 },
-  { unique: true, name: 'unique_variant_sku' },
-);
-
-productVariantSchema.index(
-  { product: 1, color: 1, sizeSet: 1 },
+  { productColour: 1, sizeSetRef: 1 },
   {
     unique: true,
-    name: 'unique_product_color_size_set',
+    name: 'unique_sku_per_product_colour_size_set',
+    partialFilterExpression: {
+      productColour: { $type: 'objectId' },
+      sizeSetRef: { $type: 'objectId' },
+    },
   },
 );
-
 productVariantSchema.index(
-  { product: 1, sourceProductCode: 1 },
-  {
-    name: 'variants_by_source_product_code',
-    partialFilterExpression: { sourceProductCode: { $type: 'string' } },
-  },
+  { product: 1, status: 1, createdAt: -1 },
+  { name: 'skus_by_product_status_and_date' },
 );
 
-const ProductVariant = mongoose.model(
-  'ProductVariant',
-  productVariantSchema,
-);
-
-module.exports = ProductVariant;
+module.exports = mongoose.model('ProductVariant', productVariantSchema);

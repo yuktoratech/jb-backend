@@ -1,280 +1,115 @@
 const ApiError = require('../../utils/ApiError');
-const {
-  calculateDiscountedUnitMinor,
-} = require('./orderMoney.utils');
+const { decimalNumberToFraction } = require('./orderMoney.utils');
+const { GST_PERCENT } = require('./order.constants');
 
-const MONEY_SCALE = 100;
-
-const assertFiniteNumber = (value, label) => {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    throw new ApiError(409, `${label} is not valid for order pricing`);
-  }
-};
-
-const toMinorUnits = (value, label = 'Amount') => {
-  assertFiniteNumber(value, label);
-
-  if (value < 0) {
-    throw new ApiError(409, `${label} cannot be negative`);
-  }
-
-  const minorUnits = Math.round((value + Number.EPSILON) * MONEY_SCALE);
-
-  if (!Number.isSafeInteger(minorUnits)) {
+const safeInteger = (value, label) => {
+  if (!Number.isSafeInteger(value) || value < 0) {
     throw new ApiError(409, `${label} is outside the supported range`);
   }
-
-  return minorUnits;
+  return value;
 };
 
-const fromMinorUnits = (value) => {
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new ApiError(
-      409,
-      'Calculated order amount is outside the supported range',
-    );
+const multiply = (left, right, label) => {
+  const result = BigInt(left) * BigInt(right);
+  if (result > BigInt(Number.MAX_SAFE_INTEGER)) throw new ApiError(409, `${label} is outside the supported range`);
+  return Number(result);
+};
+
+const add = (left, right, label) => safeInteger(left + right, label);
+
+// Deterministic round-half-up for non-negative rational values.
+const roundFraction = (numerator, denominator) => {
+  if (denominator <= 0n || numerator < 0n) throw new RangeError('Invalid non-negative fraction');
+  const result = (numerator + denominator / 2n) / denominator;
+  if (result > BigInt(Number.MAX_SAFE_INTEGER)) throw new RangeError('Rounded amount is outside the supported range');
+  return Number(result);
+};
+
+const percentageOfMinor = (amountMinor, percent) => {
+  safeInteger(amountMinor, 'Amount');
+  if (typeof percent !== 'number' || !Number.isFinite(percent) || percent < 0 || percent > 100) {
+    throw new ApiError(409, 'Discount percent must be between 0 and 100');
   }
-
-  return value / MONEY_SCALE;
+  const fraction = decimalNumberToFraction(percent);
+  return roundFraction(
+    BigInt(amountMinor) * fraction.numerator,
+    100n * fraction.denominator,
+  );
 };
 
-const assertDiscountPercent = (discountPercent) => {
-  assertFiniteNumber(discountPercent, 'Account discount percent');
-
-  if (discountPercent < 0 || discountPercent > 100) {
-    throw new ApiError(
-      409,
-      'Account discount percent must be between 0 and 100',
-    );
+const createOrderItemSnapshot = ({ variant, quantity }) => {
+  const product = variant.product;
+  const productColour = variant.productColour;
+  const sizeSet = variant.sizeSetRef;
+  if (!product || !productColour || !productColour.colour || !sizeSet) {
+    throw new ApiError(409, `Finalized catalog data is incomplete for SKU ${variant.sku}`);
   }
-};
-
-const assertQuantity = (quantity) => {
+  safeInteger(product.mrpPerPieceMinor, 'MRP per piece');
+  if (!Number.isSafeInteger(sizeSet.pieceCount) || sizeSet.pieceCount <= 0) {
+    throw new ApiError(409, `SizeSet piece count is invalid for SKU ${variant.sku}`);
+  }
   if (!Number.isSafeInteger(quantity) || quantity <= 0) {
-    throw new ApiError(
-      400,
-      'Order item quantity must be a positive whole number',
-    );
-  }
-};
-
-const addMinorUnits = (left, right) => {
-  const total = left + right;
-
-  if (!Number.isSafeInteger(total) || total < 0) {
-    throw new ApiError(
-      409,
-      'Calculated order amount is outside the supported range',
-    );
+    throw new ApiError(400, 'Order Set quantity must be a positive whole number');
   }
 
-  return total;
-};
-
-const multiplyMinorUnits = (minorUnits, quantity) => {
-  const total = minorUnits * quantity;
-
-  if (!Number.isSafeInteger(total) || total < 0) {
-    throw new ApiError(
-      409,
-      'Calculated order amount is outside the supported range',
-    );
-  }
-
-  return total;
-};
-
-const calculateLinePricing = ({ basePrice, discountPercent, quantity }) => {
-  assertDiscountPercent(discountPercent);
-  assertQuantity(quantity);
-
-  const basePriceMinor = toMinorUnits(basePrice, 'Product MRP');
-  let unitPriceMinor;
-
-  try {
-    unitPriceMinor = calculateDiscountedUnitMinor(
-      basePriceMinor,
-      discountPercent,
-    );
-  } catch (error) {
-    throw new ApiError(409, error.message);
-  }
-
-  if (!Number.isSafeInteger(unitPriceMinor) || unitPriceMinor < 0) {
-    throw new ApiError(409, 'Calculated unit price is outside the supported range');
-  }
-
-  const lineSubtotalMinor = multiplyMinorUnits(basePriceMinor, quantity);
-  const lineTotalMinor = multiplyMinorUnits(unitPriceMinor, quantity);
-  const discountAmountMinor = lineSubtotalMinor - lineTotalMinor;
-
+  const setMrpMinor = multiply(product.mrpPerPieceMinor, sizeSet.pieceCount, 'Set MRP');
+  const originalPieceQty = multiply(quantity, sizeSet.pieceCount, 'Original piece quantity');
+  const lineGrossMinor = multiply(setMrpMinor, quantity, 'Line gross amount');
   return {
-    basePrice: fromMinorUnits(basePriceMinor),
-    discountPercent,
-    unitPrice: fromMinorUnits(unitPriceMinor),
-    lineSubtotal: fromMinorUnits(lineSubtotalMinor),
-    discountAmount: fromMinorUnits(discountAmountMinor),
-    lineTotal: fromMinorUnits(lineTotalMinor),
-  };
-};
-
-const copyInventoryAllocation = (inventoryAllocation = []) => {
-  if (!Array.isArray(inventoryAllocation)) {
-    throw new ApiError(500, 'Inventory allocation must be an array');
-  }
-
-  return inventoryAllocation.map(({ shelf, quantity }) => ({
-    shelf,
-    quantity,
-  }));
-};
-
-const resolveProductSnapshot = (variant, product) => {
-  const resolvedProduct = product || variant?.product;
-
-  if (
-    !variant?._id ||
-    !resolvedProduct ||
-    typeof resolvedProduct !== 'object' ||
-    !resolvedProduct._id
-  ) {
-    throw new ApiError(500, 'Variant and product data are required for pricing');
-  }
-
-  return resolvedProduct;
-};
-
-const createOrderItemSnapshot = ({
-  variant,
-  product,
-  account,
-  quantity,
-  discountPercent,
-  inventoryAllocation = [],
-}) => {
-  const resolvedProduct = resolveProductSnapshot(variant, product);
-  const resolvedDiscountPercent =
-    account?.discountPercent ?? discountPercent;
-  const pricing = calculateLinePricing({
-    basePrice: resolvedProduct.mrp,
-    discountPercent: resolvedDiscountPercent,
-    quantity,
-  });
-
-  return {
-    productId: resolvedProduct._id,
-    variantId: variant._id,
+    productId: product._id,
+    productColourId: productColour._id,
+    skuId: variant._id,
     sku: variant.sku,
-    productName: resolvedProduct.productName,
-    productCode: resolvedProduct.productCode,
-    productTitle: resolvedProduct.title,
-    color: variant.color,
-    sizeSet: variant.sizeSet,
-    quantity,
-    ...pricing,
-    inventoryAllocation: copyInventoryAllocation(inventoryAllocation),
+    productName: product.name,
+    colour: productColour.colour.name,
+    sizeSetLabel: sizeSet.label,
+    sizes: [...sizeSet.sizes],
+    piecesPerSet: sizeSet.pieceCount,
+    mrpPerPieceMinor: product.mrpPerPieceMinor,
+    setMrpMinor,
+    originalSetQty: quantity,
+    currentSetQty: quantity,
+    originalPieceQty,
+    currentPieceQty: originalPieceQty,
+    originalLineGrossMinor: lineGrossMinor,
+    currentLineGrossMinor: lineGrossMinor,
+    isRemoved: false,
   };
 };
 
-const toPlainItem = (item) => {
-  if (!item || typeof item !== 'object') {
-    throw new ApiError(500, 'Order item snapshot is required');
+const recalculateOrderItem = (item, currentSetQty) => {
+  if (!Number.isSafeInteger(currentSetQty) || currentSetQty < 0) {
+    throw new ApiError(400, 'Order Set quantity must be a non-negative whole number');
   }
-
-  if (typeof item.toObject === 'function') {
-    return item.toObject({
-      depopulate: true,
-      getters: false,
-      virtuals: false,
-    });
-  }
-
-  return { ...item };
+  const currentPieceQty = multiply(currentSetQty, item.piecesPerSet, 'Current piece quantity');
+  const currentLineGrossMinor = multiply(item.setMrpMinor, currentSetQty, 'Current line gross amount');
+  return { currentSetQty, currentPieceQty, currentLineGrossMinor, isRemoved: currentSetQty === 0 };
 };
 
-const recalculateOrderItem = (
-  item,
-  quantity,
-  inventoryAllocation = item?.inventoryAllocation,
-) => {
-  const snapshot = toPlainItem(item);
-  const pricing = calculateLinePricing({
-    basePrice: snapshot.basePrice,
-    discountPercent: snapshot.discountPercent,
-    quantity,
-  });
-
-  return {
-    ...snapshot,
-    quantity,
-    ...pricing,
-    inventoryAllocation: copyInventoryAllocation(inventoryAllocation),
-  };
-};
-
-const calculateOrderTotals = (items) => {
-  if (!Array.isArray(items) || items.length === 0) {
-    throw new ApiError(400, 'At least one order item is required');
-  }
-
-  let subtotalMinor = 0;
-  let discountAmountMinor = 0;
-  let totalAmountMinor = 0;
-  let totalPieces = 0;
-
+const calculateOrderTotals = (items, discountPercent) => {
+  let grossAmountMinor = 0;
   items.forEach((item) => {
-    if (item.isRemoved) {
-      if (
-        item.quantity !== 0 ||
-        toMinorUnits(item.lineSubtotal, 'Line subtotal') !== 0 ||
-        toMinorUnits(item.discountAmount, 'Line discount amount') !== 0 ||
-        toMinorUnits(item.lineTotal, 'Line total') !== 0
-      ) {
-        throw new ApiError(409, 'Removed order item pricing is inconsistent');
-      }
-
-      return;
-    }
-
-    assertQuantity(item.quantity);
-
-    subtotalMinor = addMinorUnits(
-      subtotalMinor,
-      toMinorUnits(item.lineSubtotal, 'Line subtotal'),
-    );
-    discountAmountMinor = addMinorUnits(
-      discountAmountMinor,
-      toMinorUnits(item.discountAmount, 'Line discount amount'),
-    );
-    totalAmountMinor = addMinorUnits(
-      totalAmountMinor,
-      toMinorUnits(item.lineTotal, 'Line total'),
-    );
-    totalPieces += item.quantity;
-
-    if (!Number.isSafeInteger(totalPieces)) {
-      throw new ApiError(409, 'Total pieces is outside the supported range');
-    }
+    grossAmountMinor = add(grossAmountMinor, item.currentLineGrossMinor, 'Gross amount');
   });
-
-  if (subtotalMinor - discountAmountMinor !== totalAmountMinor) {
-    throw new ApiError(409, 'Order item pricing totals are inconsistent');
-  }
-
+  const discountAmountMinor = percentageOfMinor(grossAmountMinor, discountPercent);
+  const taxableAmountMinor = grossAmountMinor - discountAmountMinor;
+  const gstAmountMinor = percentageOfMinor(taxableAmountMinor, GST_PERCENT);
+  const finalAmountMinor = add(taxableAmountMinor, gstAmountMinor, 'Final amount');
   return {
-    subtotal: fromMinorUnits(subtotalMinor),
-    discountAmount: fromMinorUnits(discountAmountMinor),
-    totalAmount: fromMinorUnits(totalAmountMinor),
-    totalPieces,
+    grossAmountMinor,
+    discountPercent,
+    discountAmountMinor,
+    taxableAmountMinor,
+    gstPercent: GST_PERCENT,
+    gstAmountMinor,
+    finalAmountMinor,
   };
 };
-
-const calculateOrderPricing = calculateOrderTotals;
 
 module.exports = {
-  calculateLinePricing,
-  calculateOrderPricing,
   calculateOrderTotals,
   createOrderItemSnapshot,
+  percentageOfMinor,
   recalculateOrderItem,
+  roundFraction,
 };

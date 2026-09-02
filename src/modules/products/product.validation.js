@@ -1,278 +1,88 @@
 const { z } = require('zod');
+const { normalizeProductCode, normalizeSku } = require('../../utils/sku');
 
-const { normalizeSku, normalizeSkuPart } = require('../../utils/sku');
-
-const objectIdSchema = (fieldName) =>
-  z
-    .string({ error: `${fieldName} is required` })
-    .trim()
-    .regex(/^[a-f\d]{24}$/i, `A valid ${fieldName.toLowerCase()} is required`);
-
-const requiredString = (fieldName, maxLength) =>
-  z
-    .string({ error: `${fieldName} is required` })
-    .trim()
-    .min(1, `${fieldName} is required`)
-    .max(maxLength, `${fieldName} cannot exceed ${maxLength} characters`);
-
-const optionalString = (fieldName, maxLength) =>
-  z
-    .string({ error: `${fieldName} must be a string` })
-    .trim()
-    .max(maxLength, `${fieldName} cannot exceed ${maxLength} characters`)
-    .optional();
-
-const canNormalizeSkuPart = (value) => {
-  try {
-    normalizeSkuPart(value);
-    return true;
-  } catch (error) {
-    return false;
-  }
-};
-
-const canNormalizeSku = (value) => {
-  try {
-    normalizeSku(value);
-    return true;
-  } catch (error) {
-    return false;
-  }
-};
-
-const productNameSchema = requiredString('Product name', 150).refine(
-  canNormalizeSkuPart,
-  'Product name must contain letters or numbers that can be used in a SKU',
-);
-
-const productCodeSchema = requiredString('Product code', 100)
-  .regex(
-    /^[a-zA-Z0-9]+(?:[-_][a-zA-Z0-9]+)*$/,
-    'Product code may contain only letters, numbers, single hyphens, and underscores',
-  )
-  .transform((value) => value.toUpperCase());
-
-const titleSchema = requiredString('Product title', 300);
-const categoryIdSchema = objectIdSchema('Category ID');
-const productIdSchema = objectIdSchema('Product ID');
-const variantIdSchema = objectIdSchema('Variant ID');
-
-const mrpSchema = z
-  .number({ error: 'MRP must be a number' })
-  .finite('MRP must be a finite number')
-  .nonnegative('MRP cannot be negative');
-
-const statusSchema = z.enum(['active', 'inactive'], {
-  error: 'Status must be active or inactive',
+const objectId = (label) => z.string({ error: `${label} is required` }).trim().regex(/^[a-f\d]{24}$/i, `A valid ${label.toLowerCase()} is required`);
+const requiredText = (label, max) => z.string({ error: `${label} is required` }).trim().min(1, `${label} is required`).max(max, `${label} cannot exceed ${max} characters`).transform((value) => value.replace(/\s+/g, ' '));
+const optionalText = (label, max) => z.string({ error: `${label} must be a string` }).trim().max(max, `${label} cannot exceed ${max} characters`).optional();
+const status = z.enum(['active', 'inactive'], { error: 'Status must be active or inactive' });
+const productCode = requiredText('Product code', 100).transform((value, context) => {
+  try { return normalizeProductCode(value); } catch (error) { context.addIssue({ code: 'custom', message: error.message }); return z.NEVER; }
 });
-
-const imageSchema = z
-  .string({ error: 'Each image must be a string' })
-  .trim()
-  .min(1, 'Image values cannot be empty')
-  .max(2048, 'Image values cannot exceed 2048 characters');
-
-const colorSchema = requiredString('Color', 100).refine(
-  canNormalizeSkuPart,
-  'Color must contain letters or numbers that can be used in a SKU',
-);
-
-const sizeSetSchema = requiredString('Size set', 100).refine(
-  canNormalizeSkuPart,
-  'Size set must contain letters or numbers that can be used in a SKU',
-);
-
-const skuSchema = requiredString('SKU', 255).refine(
-  canNormalizeSku,
-  'SKU must contain letters or numbers',
-);
-
-const colorGroupSchema = z
+const manualSku = requiredText('SKU', 255).transform((value, context) => {
+  try { return normalizeSku(value); } catch (error) { context.addIssue({ code: 'custom', message: error.message }); return z.NEVER; }
+});
+const skuInput = z.object({ sizeSetId: objectId('SizeSet ID'), sku: manualSku.optional(), status: status.optional() }).strict();
+const productColourInput = z
   .object({
-    color: colorSchema,
-    sizeSets: z
-      .array(sizeSetSchema, { error: 'Size sets must be an array' })
-      .min(1, 'At least one size set is required')
-      .max(100, 'A color cannot contain more than 100 size sets'),
+    colourId: objectId('Colour ID'),
+    productCode,
+    status: status.optional(),
+    skus: z.array(skuInput).min(1, 'At least one SKU is required').max(100),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    const ids = new Set();
+    value.skus.forEach((sku, index) => {
+      if (ids.has(sku.sizeSetId)) context.addIssue({ code: 'custom', path: ['skus', index, 'sizeSetId'], message: 'Duplicate SizeSets are not allowed for one ProductColour' });
+      ids.add(sku.sizeSetId);
+    });
+  });
+const productIdParams = z.object({ id: objectId('Product ID') }).strict();
+const variantIdParams = z.object({ id: objectId('SKU ID') }).strict();
 
-const colorsSchema = z
-  .array(colorGroupSchema, { error: 'Colors must be an array' })
-  .min(1, 'At least one color is required')
-  .max(100, 'A product cannot contain more than 100 colors')
-  .superRefine((colors, context) => {
-    const seenColors = new Set();
-
-    colors.forEach((colorGroup, colorIndex) => {
-      let normalizedColor;
-
-      try {
-        normalizedColor = normalizeSkuPart(colorGroup.color, 'Color');
-      } catch (error) {
-        return;
-      }
-
-      if (seenColors.has(normalizedColor)) {
-        context.addIssue({
-          code: 'custom',
-          path: [colorIndex, 'color'],
-          message: 'Duplicate colors are not allowed',
-        });
-      }
-
-      seenColors.add(normalizedColor);
-
-      const seenSizeSets = new Set();
-
-      colorGroup.sizeSets.forEach((sizeSet, sizeSetIndex) => {
-        let normalizedSizeSet;
-
-        try {
-          normalizedSizeSet = normalizeSkuPart(sizeSet, 'Size set');
-        } catch (error) {
-          return;
-        }
-
-        if (seenSizeSets.has(normalizedSizeSet)) {
-          context.addIssue({
-            code: 'custom',
-            path: [colorIndex, 'sizeSets', sizeSetIndex],
-            message: 'Duplicate size sets are not allowed for the same color',
-          });
-        }
-
-        seenSizeSets.add(normalizedSizeSet);
+const createProductBody = z
+  .object({
+    name: requiredText('Product name', 150),
+    description: optionalText('Description', 5000),
+    categoryId: objectId('Category ID'),
+    subCategoryId: objectId('SubCategory ID'),
+    fitId: objectId('Fit ID'),
+    fabricId: objectId('Fabric ID'),
+    mrpPerPieceMinor: z.number({ error: 'MRP per piece is required' }).int('MRP per piece must be a whole number').nonnegative('MRP per piece cannot be negative').max(Number.MAX_SAFE_INTEGER),
+    status: status.optional(),
+    productColours: z.array(productColourInput).min(1, 'At least one ProductColour is required').max(100),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const colours = new Set();
+    const codes = new Set();
+    const skus = new Set();
+    value.productColours.forEach((entry, colourIndex) => {
+      if (colours.has(entry.colourId)) context.addIssue({ code: 'custom', path: ['productColours', colourIndex, 'colourId'], message: 'Duplicate Colours are not allowed' });
+      if (codes.has(entry.productCode)) context.addIssue({ code: 'custom', path: ['productColours', colourIndex, 'productCode'], message: 'Duplicate Product Codes are not allowed' });
+      colours.add(entry.colourId); codes.add(entry.productCode);
+      entry.skus.forEach((sku, skuIndex) => {
+        if (sku.sku && skus.has(sku.sku)) context.addIssue({ code: 'custom', path: ['productColours', colourIndex, 'skus', skuIndex, 'sku'], message: 'Duplicate manual SKUs are not allowed' });
+        if (sku.sku) skus.add(sku.sku);
       });
     });
   });
 
-const productFields = {
-  productName: productNameSchema,
-  productCode: productCodeSchema.optional(),
-  title: titleSchema,
-  categoryId: categoryIdSchema,
-  description: optionalString('Description', 5000),
-  mrp: mrpSchema,
-  fit: optionalString('Fit', 200),
-  patternWash: optionalString('Pattern/wash', 200),
-  fabric: optionalString('Fabric', 200),
-  sleeves: optionalString('Sleeves', 200),
-  waist: optionalString('Waist', 100),
-  images: z
-    .array(imageSchema, { error: 'Images must be an array' })
-    .max(50, 'A product cannot contain more than 50 images')
-    .optional(),
-  status: statusSchema.optional(),
-};
+const updateProductBody = z.object({
+  name: requiredText('Product name', 150).optional(),
+  description: z.string().trim().max(5000).optional(),
+  categoryId: objectId('Category ID').optional(),
+  subCategoryId: objectId('SubCategory ID').optional(),
+  fitId: objectId('Fit ID').optional(),
+  fabricId: objectId('Fabric ID').optional(),
+  mrpPerPieceMinor: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+  status: status.optional(),
+}).strict().refine((body) => Object.keys(body).length > 0, { message: 'At least one field is required' });
 
-const createProductBodySchema = z
-  .object({
-    ...productFields,
-    colors: colorsSchema,
-  })
-  .strict();
-
-const updateProductBodySchema = z
-  .object({
-    productName: productNameSchema.optional(),
-    productCode: productCodeSchema.nullable().optional(),
-    title: titleSchema.optional(),
-    categoryId: categoryIdSchema.optional(),
-    description: optionalString('Description', 5000),
-    mrp: mrpSchema.optional(),
-    fit: optionalString('Fit', 200),
-    patternWash: optionalString('Pattern/wash', 200),
-    fabric: optionalString('Fabric', 200),
-    sleeves: optionalString('Sleeves', 200),
-    waist: optionalString('Waist', 100),
-    images: z
-      .array(imageSchema, { error: 'Images must be an array' })
-      .max(50, 'A product cannot contain more than 50 images')
-      .optional(),
-    status: statusSchema.optional(),
-  })
-  .strict()
-  .refine((body) => Object.keys(body).length > 0, {
-    message: 'At least one field is required',
-  });
-
-const paginationFields = {
-  page: z.coerce
-    .number({ error: 'Page must be a number' })
-    .int('Page must be an integer')
-    .min(1, 'Page must be at least 1')
-    .default(1),
-  limit: z.coerce
-    .number({ error: 'Limit must be a number' })
-    .int('Limit must be an integer')
-    .min(1, 'Limit must be at least 1')
-    .max(100, 'Limit cannot exceed 100')
-    .default(20),
-};
-
-const listProductsQuerySchema = z
-  .object({
-    ...paginationFields,
-    search: z
-      .string({ error: 'Search must be a string' })
-      .trim()
-      .max(150, 'Search cannot exceed 150 characters')
-      .optional(),
-    category: categoryIdSchema.optional(),
-    status: statusSchema.optional(),
-  })
-  .strict();
-
-const createVariantBodySchema = z
-  .object({
-    color: colorSchema,
-    sizeSet: sizeSetSchema,
-    sku: skuSchema.optional(),
-    status: statusSchema.optional(),
-  })
-  .strict();
-
-const updateVariantBodySchema = z
-  .object({
-    color: colorSchema.optional(),
-    sizeSet: sizeSetSchema.optional(),
-    sku: skuSchema.optional(),
-    status: statusSchema.optional(),
-  })
-  .strict()
-  .refine((body) => Object.keys(body).length > 0, {
-    message: 'At least one field is required',
-  });
-
-const listVariantsQuerySchema = z
-  .object({
-    status: statusSchema.optional(),
-  })
-  .strict();
-
-const productIdParamsSchema = z.object({ id: productIdSchema }).strict();
-const variantIdParamsSchema = z.object({ id: variantIdSchema }).strict();
+const pagination = { page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(20) };
+const createSkuBody = z.object({ productColourId: objectId('ProductColour ID'), sizeSetId: objectId('SizeSet ID'), sku: manualSku.optional(), status: status.optional() }).strict();
 
 module.exports = {
-  createProductSchema: { body: createProductBodySchema },
-  createVariantSchema: {
-    params: productIdParamsSchema,
-    body: createVariantBodySchema,
-  },
-  listProductsSchema: { query: listProductsQuerySchema },
-  listVariantsSchema: {
-    params: productIdParamsSchema,
-    query: listVariantsQuerySchema,
-  },
-  productIdSchema: { params: productIdParamsSchema },
-  updateProductSchema: {
-    params: productIdParamsSchema,
-    body: updateProductBodySchema,
-  },
-  updateVariantSchema: {
-    params: variantIdParamsSchema,
-    body: updateVariantBodySchema,
-  },
-  variantIdSchema: { params: variantIdParamsSchema },
+  createProductSchema: { body: createProductBody },
+  createVariantSchema: { params: productIdParams, body: createSkuBody },
+  listProductsSchema: { query: z.object({ ...pagination, search: z.string().trim().max(150).optional(), categoryId: objectId('Category ID').optional(), subCategoryId: objectId('SubCategory ID').optional(), status: status.optional() }).strict() },
+  listVariantsSchema: { params: productIdParams, query: z.object({ status: status.optional() }).strict() },
+  productIdSchema: { params: productIdParams },
+  updateProductSchema: { params: productIdParams, body: updateProductBody },
+  updateVariantSchema: { params: variantIdParams, body: z.object({ status }).strict() },
+  variantIdSchema: { params: variantIdParams },
+  productColourInput,
+  productCodeSchema: productCode,
+  skuInput,
+  statusSchema: status,
 };

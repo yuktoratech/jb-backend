@@ -1,11 +1,21 @@
+const mongoose = require('mongoose');
 const Category = require('../categories/category.model');
+const Colour = require('../colours/colour.model');
+const Fabric = require('../fabrics/fabric.model');
+const Fit = require('../fits/fit.model');
+const Inventory = require('../inventory/inventory.model');
 const inventoryService = require('../inventory/inventory.service');
+const ProductColour = require('../productColours/productColour.model');
+const { presentProductColour } = require('../productColours/productColourImage.presenter');
+const SizeSet = require('../sizeSets/sizeSet.model');
+const SubCategory = require('../subcategories/subCategory.model');
 const ProductVariant = require('../variants/productVariant.model');
 const { groupVariants } = require('../variants/variant.service');
 const Product = require('./product.model');
 const ApiError = require('../../utils/ApiError');
 const {
   generateSku,
+  normalizeProductCode,
   normalizeSku,
   normalizeSkuPart,
 } = require('../../utils/sku');
@@ -20,9 +30,17 @@ const migrationProductFields = [
 ];
 
 const productCategoryFields = '_id name slug status';
+const masterFields = '_id name slug status';
 
 const escapeRegex = (value) =>
   value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const transactionUnsupported = (error) =>
+  error?.code === 20 ||
+  error?.originalError?.code === 20 ||
+  /Transaction numbers are only allowed|does not support retryable writes/.test(
+    error?.message || '',
+  );
 
 const getDuplicateKeyPattern = (error) =>
   error?.keyPattern ||
@@ -54,11 +72,16 @@ const mapCatalogError = (error) => {
       );
     }
 
-    if (
-      keyPattern.productCode ||
-      message.includes('unique_product_code_when_present')
-    ) {
+    if (keyPattern.productCode || message.includes('unique_product_colour_code')) {
       return new ApiError(409, 'Product code already exists');
+    }
+
+    if (message.includes('unique_colour_per_product')) {
+      return new ApiError(409, 'This Colour is already assigned to the Product');
+    }
+
+    if (message.includes('unique_sku_per_product_colour_size_set')) {
+      return new ApiError(409, 'This SizeSet is already assigned to the ProductColour');
     }
 
     return new ApiError(409, 'A catalog record with these values already exists');
@@ -132,11 +155,7 @@ const buildVariantRecords = (product, colors) =>
         product: product._id,
         color: normalizedColor,
         sizeSet: normalizedSizeSet,
-        sku: generateSku(
-          product.productName,
-          normalizedColor,
-          normalizedSizeSet,
-        ),
+        sku: normalizeSku(`${product.productName}_${normalizedColor}_${normalizedSizeSet}`),
         status: product.status,
       };
     });
@@ -222,31 +241,53 @@ const buildProductDocument = (payload) =>
   });
 
 const getProductById = async (productId) => {
-  const [product, variants] = await Promise.all([
-    Product.findById(productId)
-      .populate('category', productCategoryFields)
+  const product = await Product.findById(productId)
+    .populate('category', productCategoryFields)
+    .populate('subCategory', '_id name slug status category')
+    .populate('fitId', masterFields)
+    .populate('fabricId', masterFields)
+    .lean();
+
+  if (!product) throw new ApiError(404, 'Product not found');
+
+  if (product.catalogVersion !== 2) {
+    const variants = await ProductVariant.find({ product: productId })
+      .sort({ color: 1, sizeSet: 1, _id: 1 })
+      .lean();
+    return { product, variants: groupVariants(variants) };
+  }
+
+  const [productColours, skus] = await Promise.all([
+    ProductColour.find({ product: productId })
+      .populate('colour', masterFields)
+      .sort({ createdAt: 1, _id: 1 })
       .lean(),
     ProductVariant.find({ product: productId })
-      .sort({ color: 1, sizeSet: 1, _id: 1 })
+      .populate('sizeSetRef', '_id label sizes pieceCount status')
+      .sort({ createdAt: 1, _id: 1 })
       .lean(),
   ]);
-
-  if (!product) {
-    throw new ApiError(404, 'Product not found');
-  }
+  const skusByProductColour = new Map();
+  skus.forEach((sku) => {
+    const key = sku.productColour.toString();
+    if (!skusByProductColour.has(key)) skusByProductColour.set(key, []);
+    skusByProductColour.get(key).push(sku);
+  });
 
   return {
     product,
-    variants: groupVariants(variants),
+    productColours: await Promise.all(productColours.map(async (entry) => ({
+      ...await presentProductColour(entry),
+      skus: skusByProductColour.get(entry._id.toString()) || [],
+    }))),
   };
 };
 
-const listProducts = async ({ page, limit, search, category, status }) => {
-  const filter = {};
+const listProducts = async ({ page, limit, search, categoryId, subCategoryId, status }) => {
+  const filter = { catalogVersion: 2 };
 
-  if (category) {
-    filter.category = category;
-  }
+  if (categoryId) filter.category = categoryId;
+  if (subCategoryId) filter.subCategory = subCategoryId;
 
   if (status) {
     filter.status = status;
@@ -258,17 +299,16 @@ const listProducts = async ({ page, limit, search, category, status }) => {
       $options: 'i',
     };
 
-    filter.$or = [
-      { productName: searchExpression },
-      { productCode: searchExpression },
-      { title: searchExpression },
-    ];
+    filter.$or = [{ name: searchExpression }, { description: searchExpression }];
   }
 
   const skip = (page - 1) * limit;
   const [products, total] = await Promise.all([
     Product.find(filter)
       .populate('category', productCategoryFields)
+      .populate('subCategory', '_id name slug status category')
+      .populate('fitId', masterFields)
+      .populate('fabricId', masterFields)
       .sort({ createdAt: -1, _id: -1 })
       .skip(skip)
       .limit(limit)
@@ -288,18 +328,101 @@ const listProducts = async ({ page, limit, search, category, status }) => {
 };
 
 const createProduct = async (payload) => {
-  await ensureActiveCategory(payload.categoryId);
-  await ensureProductCodeAvailable(payload.productCode);
-  await Promise.all([Product.init(), ProductVariant.init()]);
+  const subCategory = await SubCategory.findOne({
+    _id: payload.subCategoryId,
+    category: payload.categoryId,
+    status: 'active',
+  }).select('_id').lean();
+  const [category, fit, fabric] = await Promise.all([
+    Category.findOne({ _id: payload.categoryId, status: 'active' }).select('_id').lean(),
+    Fit.findOne({ _id: payload.fitId, status: 'active' }).select('_id').lean(),
+    Fabric.findOne({ _id: payload.fabricId, status: 'active' }).select('_id').lean(),
+  ]);
+  if (!category) throw new ApiError(404, 'Active category not found');
+  if (!subCategory) throw new ApiError(404, 'Active SubCategory for the Category not found');
+  if (!fit) throw new ApiError(404, 'Active Fit not found');
+  if (!fabric) throw new ApiError(404, 'Active Fabric not found');
 
-  const product = buildProductDocument(payload);
+  const colourIds = payload.productColours.map(({ colourId }) => colourId);
+  const sizeSetIds = payload.productColours.flatMap(({ skus }) => skus.map(({ sizeSetId }) => sizeSetId));
+  const [colours, sizeSets] = await Promise.all([
+    Colour.find({ _id: { $in: colourIds }, status: 'active' }).select('_id').lean(),
+    SizeSet.find({ _id: { $in: sizeSetIds }, status: 'active' }).select('_id label').lean(),
+  ]);
+  if (colours.length !== new Set(colourIds).size) throw new ApiError(404, 'One or more active Colours were not found');
+  if (sizeSets.length !== new Set(sizeSetIds).size) throw new ApiError(404, 'One or more active SizeSets were not found');
+  const sizeSetById = new Map(sizeSets.map((entry) => [entry._id.toString(), entry]));
 
-  const variantRecords = buildVariantRecords(product, payload.colors);
-  await ensureSkusAvailable(variantRecords.map((variant) => variant.sku));
+  await Promise.all([Product.init(), ProductColour.init(), ProductVariant.init(), Inventory.init()]);
+  const session = await mongoose.startSession();
+  let productId;
+  const write = async (transactionSession) => {
+    const [product] = await Product.create([{
+      catalogVersion: 2,
+      name: payload.name,
+      description: payload.description,
+      category: payload.categoryId,
+      subCategory: payload.subCategoryId,
+      fitId: payload.fitId,
+      fabricId: payload.fabricId,
+      mrpPerPieceMinor: payload.mrpPerPieceMinor,
+      status: payload.status || 'active',
+    }], transactionSession ? { session: transactionSession } : undefined);
+    productId = product._id;
+    const colourDocs = payload.productColours.map((entry) => ({
+      _id: new mongoose.Types.ObjectId(),
+      product: product._id,
+      colour: entry.colourId,
+      productCode: normalizeProductCode(entry.productCode),
+      images: [],
+      status: entry.status || 'active',
+    }));
+    await ProductColour.insertMany(colourDocs, transactionSession ? { session: transactionSession, ordered: true } : { ordered: true });
+    const skuDocs = [];
+    payload.productColours.forEach((entry, index) => {
+      entry.skus.forEach((skuInput) => {
+        const sizeSet = sizeSetById.get(skuInput.sizeSetId);
+        skuDocs.push({
+          _id: new mongoose.Types.ObjectId(),
+          catalogVersion: 2,
+          product: product._id,
+          productColour: colourDocs[index]._id,
+          sizeSetRef: sizeSet._id,
+          sku: skuInput.sku || generateSku(entry.productCode, sizeSet.label),
+          status: skuInput.status || 'active',
+        });
+      });
+    });
+    const variants = await ProductVariant.insertMany(skuDocs, transactionSession ? { session: transactionSession, ordered: true } : { ordered: true });
+    const now = new Date();
+    await Inventory.insertMany(variants.map((variant) => ({ variant: variant._id, sku: variant.sku, shelves: [], availableQuantity: 0, totalQuantity: 0, status: 'out_of_stock', createdAt: now, updatedAt: now })), transactionSession ? { session: transactionSession, ordered: true } : { ordered: true });
+  };
 
-  await persistProductWithVariants(product, variantRecords);
-
-  return getProductById(product._id);
+  try {
+    try {
+      await session.withTransaction(() => write(session));
+    } catch (error) {
+      const unsupported = transactionUnsupported(error);
+      if (!(process.env.NODE_ENV === 'test' && unsupported)) throw error;
+      try {
+        await write(null);
+      } catch (fallbackError) {
+        if (productId) {
+          const variantIds = await ProductVariant.find({ product: productId }).distinct('_id');
+          await Inventory.deleteMany({ variant: { $in: variantIds } });
+          await ProductVariant.deleteMany({ product: productId });
+          await ProductColour.deleteMany({ product: productId });
+          await Product.deleteOne({ _id: productId });
+        }
+        throw fallbackError;
+      }
+    }
+  } catch (error) {
+    throw mapCatalogError(error);
+  } finally {
+    await session.endSession();
+  }
+  return getProductById(productId);
 };
 
 const createProductForMigration = async (payload, variants) => {
@@ -427,41 +550,27 @@ const updateProduct = async (productId, payload) => {
     throw new ApiError(404, 'Product not found');
   }
 
-  if (payload.categoryId) {
-    await ensureActiveCategory(payload.categoryId);
+  if (product.catalogVersion !== 2) {
+    throw new ApiError(409, 'Legacy Product must be migrated before it can be updated through this API');
   }
 
-  if (payload.productCode) {
-    await ensureProductCodeAvailable(payload.productCode, productId);
-  }
+  const categoryId = payload.categoryId || product.category.toString();
+  const subCategoryId = payload.subCategoryId || product.subCategory.toString();
+  const checks = [];
+  if (payload.categoryId) checks.push(Category.exists({ _id: categoryId, status: 'active' }));
+  if (payload.categoryId || payload.subCategoryId) checks.push(SubCategory.exists({ _id: subCategoryId, category: categoryId, status: 'active' }));
+  if (payload.fitId) checks.push(Fit.exists({ _id: payload.fitId, status: 'active' }));
+  if (payload.fabricId) checks.push(Fabric.exists({ _id: payload.fabricId, status: 'active' }));
+  if ((await Promise.all(checks)).some((result) => !result)) throw new ApiError(404, 'One or more active Product masters were not found');
 
-  const fields = [
-    'productName',
-    'title',
-    'description',
-    'mrp',
-    'fit',
-    'patternWash',
-    'fabric',
-    'sleeves',
-    'waist',
-    'images',
-    'status',
-  ];
-
-  fields.forEach((field) => {
-    if (payload[field] !== undefined) {
-      product[field] = payload[field];
-    }
-  });
-
-  if (payload.categoryId) {
-    product.category = payload.categoryId;
-  }
-
-  if (payload.productCode !== undefined) {
-    product.productCode = payload.productCode || undefined;
-  }
+  if (payload.name !== undefined) product.name = payload.name;
+  if (payload.description !== undefined) product.description = payload.description;
+  if (payload.categoryId) product.category = payload.categoryId;
+  if (payload.subCategoryId) product.subCategory = payload.subCategoryId;
+  if (payload.fitId) product.fitId = payload.fitId;
+  if (payload.fabricId) product.fabricId = payload.fabricId;
+  if (payload.mrpPerPieceMinor !== undefined) product.mrpPerPieceMinor = payload.mrpPerPieceMinor;
+  if (payload.status) product.status = payload.status;
 
   try {
     await product.save();
@@ -470,13 +579,16 @@ const updateProduct = async (productId, payload) => {
   }
 
   if (payload.status === 'inactive') {
-    await ProductVariant.updateMany(
-      { product: productId },
-      {
-        $set: { status: 'inactive' },
-        $inc: { __v: 1 },
-      },
-    );
+    await Promise.all([
+      ProductVariant.updateMany(
+        { product: productId },
+        { $set: { status: 'inactive' }, $inc: { __v: 1 } },
+      ),
+      ProductColour.updateMany(
+        { product: productId },
+        { $set: { status: 'inactive' }, $inc: { __v: 1 } },
+      ),
+    ]);
   }
 
   return getProductById(productId);
@@ -500,6 +612,11 @@ const deactivateProduct = async (productId) => {
       $set: { status: 'inactive' },
       $inc: { __v: 1 },
     },
+  );
+
+  await ProductColour.updateMany(
+    { product: productId },
+    { $set: { status: 'inactive' }, $inc: { __v: 1 } },
   );
 
   return getProductById(productId);

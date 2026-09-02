@@ -2,47 +2,33 @@ const ORDER_STATUSES = Object.freeze([
   'PENDING_WHOLESALER',
   'PENDING_ADMIN',
   'CONFIRMED',
-  'REJECTED',
+  'CANCELLED',
 ]);
 
 const ORDER_SOURCE_ROLES = Object.freeze(['wholesaler', 'retailer']);
-
-const ORDER_REJECTED_BY = Object.freeze(['wholesaler', 'admin']);
-
-const ORDER_INVENTORY_STATUSES = Object.freeze([
-  'RESERVED',
-  'RELEASED',
-  'DEDUCTED',
-]);
-
+const ORDER_CANCELLED_BY = Object.freeze(['admin', 'wholesaler', 'retailer']);
 const ORDER_ACTIVITY_TYPES = Object.freeze([
   'CREATED',
-  'WHOLESALER_CONFIRMED',
-  'WHOLESALER_REJECTED',
+  'WHOLESALER_ACCEPTED',
   'WHOLESALER_ADJUSTED',
-  'ADMIN_CONFIRMED',
-  'ADMIN_REJECTED',
   'ADMIN_ADJUSTED',
+  'RETAILER_CANCELLED',
+  'WHOLESALER_CANCELLED',
+  'ADMIN_CANCELLED',
+  'ADMIN_CONFIRMED',
 ]);
-
-const ORDER_ACTOR_ROLES = Object.freeze([
-  'admin',
-  'wholesaler',
-  'retailer',
-]);
-
-const MONEY_SCALE = 100;
-const ORDER_PRICING_VERSION = 'ACCOUNT_DISCOUNT_V1';
+const ORDER_ACTOR_ROLES = Object.freeze(['admin', 'wholesaler', 'retailer']);
 const ORDER_NUMBER_PATTERN = /^JB-\d{8}-[A-Z0-9]{6,12}$/;
+const ORDER_PRICING_VERSION = 'MINOR_UNITS_GST_V1';
+const GST_PERCENT = 5;
 
 module.exports = {
-  MONEY_SCALE,
+  GST_PERCENT,
   ORDER_ACTIVITY_TYPES,
   ORDER_ACTOR_ROLES,
-  ORDER_INVENTORY_STATUSES,
+  ORDER_CANCELLED_BY,
   ORDER_NUMBER_PATTERN,
   ORDER_PRICING_VERSION,
-  ORDER_REJECTED_BY,
   ORDER_SOURCE_ROLES,
   ORDER_STATUSES,
 };

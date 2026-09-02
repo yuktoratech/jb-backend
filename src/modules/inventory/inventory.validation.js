@@ -8,8 +8,6 @@ const INVENTORY_STATUSES = ['in_stock', 'out_of_stock'];
 const TRANSACTION_SOURCES = ['admin', 'import', 'order', 'system'];
 const TRANSACTION_TYPES = [
   ...ADJUSTMENT_TYPES,
-  'ORDER_RESERVE',
-  'ORDER_RELEASE',
   'ORDER_DEDUCT',
   'MANUAL_ADJUSTMENT',
 ];
@@ -166,6 +164,12 @@ const skuParamsSchema = z
   })
   .strict();
 
+const importBatchParamsSchema = z
+  .object({
+    id: z.string().trim().regex(/^[a-f\d]{24}$/i, 'A valid import batch ID is required'),
+  })
+  .strict();
+
 const listTransactionsQuerySchema = z
   .object({
     ...paginationFields,
@@ -186,6 +190,7 @@ module.exports = {
   adjustInventorySchema: { body: adjustInventoryBodySchema },
   inventoryBySkuSchema: { params: skuParamsSchema },
   inventoryByVariantSchema: { params: variantIdParamsSchema },
+  importBatchSchema: { params: importBatchParamsSchema },
   listInventorySchema: { query: listInventoryQuerySchema },
   listTransactionsSchema: {
     params: variantIdParamsSchema,

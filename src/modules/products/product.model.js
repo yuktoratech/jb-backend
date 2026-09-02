@@ -1,108 +1,78 @@
 const mongoose = require('mongoose');
 
-const PRODUCT_STATUSES = ['active', 'inactive'];
-const PRODUCT_CODE_PATTERN = /^[A-Z0-9]+(?:[-_][A-Z0-9]+)*$/;
-
-const normalizeProductCode = (value) => {
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-
-  if (typeof value !== 'string') {
-    return value;
-  }
-
-  const normalized = value.trim().toUpperCase();
-  return normalized || undefined;
-};
+const isNonNegativeSafeInteger = (value) =>
+  value === undefined || (Number.isSafeInteger(value) && value >= 0);
 
 const productSchema = new mongoose.Schema(
   {
-    productName: {
+    catalogVersion: { type: Number, enum: [2] },
+    name: {
       type: String,
-      required: true,
       trim: true,
+      maxlength: 150,
+      required() { return this.catalogVersion === 2; },
     },
-    productCode: {
-      type: String,
-      set: normalizeProductCode,
-      validate: {
-        validator: (value) =>
-          value === undefined || PRODUCT_CODE_PATTERN.test(value),
-        message:
-          'Product code may contain only letters, numbers, hyphens, and underscores',
-      },
-    },
-    title: {
-      type: String,
-      required: true,
-      trim: true,
-    },
+    description: { type: String, trim: true, maxlength: 5000 },
     category: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Category',
       required: true,
       index: true,
     },
-    description: {
-      type: String,
-      trim: true,
+    subCategory: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'SubCategory',
+      required() { return this.catalogVersion === 2; },
+      index: true,
     },
-    mrp: {
+    fitId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Fit',
+      required() { return this.catalogVersion === 2; },
+      index: true,
+    },
+    fabricId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Fabric',
+      required() { return this.catalogVersion === 2; },
+      index: true,
+    },
+    mrpPerPieceMinor: {
       type: Number,
-      required: true,
-      min: [0, 'MRP cannot be negative'],
+      required() { return this.catalogVersion === 2; },
+      min: [0, 'MRP per piece cannot be negative'],
       validate: {
-        validator: Number.isFinite,
-        message: 'MRP must be a finite number',
+        validator: isNonNegativeSafeInteger,
+        message: 'MRP per piece must be a non-negative safe integer',
       },
-    },
-    fit: {
-      type: String,
-      trim: true,
-    },
-    patternWash: {
-      type: String,
-      trim: true,
-    },
-    fabric: {
-      type: String,
-      trim: true,
-    },
-    sleeves: {
-      type: String,
-      trim: true,
-    },
-    waist: {
-      type: String,
-      trim: true,
-    },
-    images: {
-      type: [String],
-      default: [],
     },
     status: {
       type: String,
-      enum: PRODUCT_STATUSES,
+      enum: ['active', 'inactive'],
       default: 'active',
       required: true,
       index: true,
     },
+
+    // Legacy fields remain mapped for migration validation and historical code.
+    // New APIs never accept or write them.
+    productName: { type: String, trim: true },
+    productCode: { type: String, trim: true },
+    title: { type: String, trim: true },
+    mrp: { type: Number },
+    fit: { type: String, trim: true },
+    patternWash: { type: String, trim: true },
+    fabric: { type: String, trim: true },
+    sleeves: { type: String, trim: true },
+    waist: { type: String, trim: true },
+    images: { type: [String], default: undefined },
   },
-  {
-    timestamps: true,
-  },
+  { timestamps: true },
 );
 
 productSchema.index(
-  { productCode: 1 },
-  {
-    unique: true,
-    partialFilterExpression: { productCode: { $type: 'string' } },
-    name: 'unique_product_code_when_present',
-  },
+  { category: 1, subCategory: 1, status: 1, createdAt: -1 },
+  { name: 'products_by_catalog_filters_and_date' },
 );
 
-const Product = mongoose.model('Product', productSchema);
-
-module.exports = Product;
+module.exports = mongoose.model('Product', productSchema);

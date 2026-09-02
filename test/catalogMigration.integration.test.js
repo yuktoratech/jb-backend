@@ -502,15 +502,15 @@ test(
         .lean();
       assert.equal(abcVariants.length, 2);
       const blackVariant = abcVariants.find(
-        ({ sku }) => sku === 'ABC_BLACK_30-38',
+        ({ sku }) => sku === 'abc_black_30-38',
       );
       const darkBlueVariant = abcVariants.find(
-        ({ sku }) => sku === 'ABC_DBLUE_30-36',
+        ({ sku }) => sku === 'abc_dblue_30-36',
       );
       assert.ok(blackVariant);
       assert.ok(darkBlueVariant);
-      assert.equal(blackVariant.sourceProductCode, 'ABC_BLACK');
-      assert.equal(darkBlueVariant.sourceProductCode, 'ABC_DBLUE');
+      assert.equal(blackVariant.sourceProductCode, 'abc_black');
+      assert.equal(darkBlueVariant.sourceProductCode, 'abc_dblue');
       assert.equal(
         toPlainObject(blackVariant.attributeOverrides).patternWash,
         'Solid',
@@ -525,7 +525,6 @@ test(
       emptyInventories.forEach((inventory) => {
         assert.equal(inventory.totalQuantity, 0);
         assert.equal(inventory.availableQuantity, 0);
-        assert.equal(inventory.reservedQuantity, 0);
         assert.deepEqual(inventory.shelves, []);
       });
 
@@ -593,17 +592,16 @@ test(
         slug: 'jeans',
         status: 'active',
       });
-      await productService.createProduct({
+      await productService.createProductForMigration({
         productName: 'ABC',
         productCode: 'ABC',
         title: 'Men Loose-fit Jeans',
         categoryId: legacyCategory._id.toString(),
         mrp: 1299,
-        colors: [
-          { color: 'BLACK', sizeSets: ['30-38'] },
-          { color: 'DBLUE', sizeSets: ['30-36'] },
-        ],
-      });
+      }, [
+        { color: 'BLACK', sizeSet: '30-38', sku: 'ABC_BLACK_30-38' },
+        { color: 'DBLUE', sizeSet: '30-36', sku: 'ABC_DBLUE_30-36' },
+      ]);
       const enrichExisting = await uploadWorkbook(
         '/catalog-migrations/import?sampleSize=1',
         workbook,
@@ -635,13 +633,13 @@ test(
           .sort((left, right) => left.sku.localeCompare(right.sku)),
         [
           {
-            sku: 'ABC_BLACK_30-38',
-            sourceProductCode: 'ABC_BLACK',
+            sku: 'abc_black_30-38',
+            sourceProductCode: 'abc_black',
             patternWash: 'Solid',
           },
           {
-            sku: 'ABC_DBLUE_30-36',
-            sourceProductCode: 'ABC_DBLUE',
+            sku: 'abc_dblue_30-36',
+            sourceProductCode: 'abc_dblue',
             patternWash: 'Washed',
           },
         ],
@@ -672,14 +670,13 @@ test(
       assert.equal(stockImport.body.data.summary.stockAlreadyInitialized, 0);
 
       const stockedVariant = await ProductVariant.findOne({
-        sku: 'ABC_BLACK_30-38',
+        sku: 'abc_black_30-38',
       }).lean();
       const stockedInventory = await Inventory.findOne({
         variant: stockedVariant._id,
       }).lean();
       assert.equal(stockedInventory.totalQuantity, 5);
       assert.equal(stockedInventory.availableQuantity, 5);
-      assert.equal(stockedInventory.reservedQuantity, 0);
       assert.deepEqual(stockedInventory.shelves, [
         { shelf: 'MIG-A1', quantity: 5 },
       ]);
@@ -716,7 +713,7 @@ test(
       );
 
       const liveVariant = await ProductVariant.findOne({
-        sku: 'DEF_RED_M-XL',
+        sku: 'def_red_m-xl',
       }).lean();
       await inventoryService.adjustInventory(
         {
