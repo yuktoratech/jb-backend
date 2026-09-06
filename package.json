@@ -10,8 +10,10 @@
     "seed:admin": "node scripts/seedAdmin.js",
     "migration:catalog:validate": "node scripts/validateCatalogMigration.js",
     "migration:catalog:import": "node scripts/importCatalogMigration.js",
+    "migration:reconcile": "node scripts/reconcileLegacyData.js",
     "test:accounts": "node --test test/accounts.integration.test.js",
     "test:catalog-migration": "node --test test/catalogMigration.integration.test.js",
+    "test:data-reconciliation": "node --test test/dataReconciliation.integration.test.js",
     "test:inventory": "node --test test/inventory.integration.test.js",
     "test:orders": "node --test test/orders.integration.test.js test/orderInventory.integration.test.js"
   },
@@ -26,6 +28,7 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "firebase-admin": "^14.3.0",
     "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.9.4",

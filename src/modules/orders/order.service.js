@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const ApiError = require('../../utils/ApiError');
 const addressService = require('../addresses/address.service');
 const inventoryService = require('../inventory/inventory.service');
+const { safelyNotifyOrderEvent } = require('../notifications/orderNotification.service');
 const ProductVariant = require('../variants/productVariant.model');
 const User = require('../users/user.model');
 const Order = require('./order.model');
@@ -86,7 +87,8 @@ const resolveParties = async (actor) => {
   return { sourceRole: 'retailer', placedBy: actor._id, wholesaler: actor.parentWholesaler, retailer: actor._id, status: 'PENDING_WHOLESALER' };
 };
 
-const createOrder = async (payload, requestActor, rawKey) => {
+const createOrder = async (payload, requestActor, rawKey, testHooks = {}) => {
+  const hooks = process.env.NODE_ENV === 'test' ? testHooks : {};
   const actor = await loadActor(requestActor);
   const parties = await resolveParties(actor);
   const idempotencyKey = normalizeIdempotencyKey(rawKey);
@@ -112,12 +114,20 @@ const createOrder = async (payload, requestActor, rawKey) => {
     idempotencyKey, requestFingerprint, items, deliveryAddress, ...totals,
     history: [{ type: 'CREATED', performedBy: actor._id, performedByRole: actor.role, previousStatus: null, newStatus: parties.status }],
   });
+  if (hooks.beforeOrderSave) await hooks.beforeOrderSave({ order });
   try { await order.save(); } catch (error) {
     if (error?.code === 11000 && idempotencyKey) {
       const concurrent = await Order.findOne({ placedBy: actor._id, idempotencyKey }).select('+requestFingerprint').lean();
       if (concurrent?.requestFingerprint === requestFingerprint) return getOrderById(concurrent._id, actor);
     }
     throw mapSaveError(error);
+  }
+  if (order.sourceRole === 'retailer') {
+    await safelyNotifyOrderEvent({
+      eventType: 'RETAILER_ORDER_SUBMITTED',
+      order,
+      recipientUserIds: [order.wholesaler],
+    });
   }
   return getOrderById(order._id, actor);
 };
@@ -145,6 +155,11 @@ const appendHistory = (order, { type, actor, previousStatus, newStatus, reason, 
   order.history.push({ type, performedBy: actor._id, performedByRole: actor.role, previousStatus, newStatus, reason, itemChanges });
 };
 
+const adminActionRecipients = (order) => [
+  order.wholesaler,
+  ...(order.sourceRole === 'retailer' && order.retailer ? [order.retailer] : []),
+];
+
 const acceptWholesalerOrder = async (id, requestActor) => {
   const actor = await loadActor(requestActor);
   const order = await getOrderDocument(id, actor);
@@ -153,6 +168,11 @@ const acceptWholesalerOrder = async (id, requestActor) => {
   order.status = 'PENDING_ADMIN';
   appendHistory(order, { type: 'WHOLESALER_ACCEPTED', actor, previousStatus, newStatus: order.status });
   try { await order.save(); } catch (error) { throw mapSaveError(error); }
+  await safelyNotifyOrderEvent({
+    eventType: 'WHOLESALER_ORDER_FORWARDED',
+    order,
+    recipientUserIds: [order.retailer],
+  });
   return getOrderById(order._id, actor);
 };
 
@@ -176,6 +196,19 @@ const cancelOrder = async (id, requestActor, reason) => {
   order.status = 'CANCELLED'; order.cancelledBy = actor.role; order.cancellationReason = reason;
   appendHistory(order, { type, actor, previousStatus, newStatus: 'CANCELLED', reason });
   try { await order.save(); } catch (error) { throw mapSaveError(error); }
+  if (actor.role === 'wholesaler' && order.sourceRole === 'retailer') {
+    await safelyNotifyOrderEvent({
+      eventType: 'WHOLESALER_ORDER_CANCELLED',
+      order,
+      recipientUserIds: [order.retailer],
+    });
+  } else if (actor.role === 'admin') {
+    await safelyNotifyOrderEvent({
+      eventType: 'ADMIN_ORDER_CANCELLED',
+      order,
+      recipientUserIds: adminActionRecipients(order),
+    });
+  }
   return getOrderById(order._id, actor);
 };
 
@@ -207,6 +240,11 @@ const adjustOrder = async (id, payload, requestActor, stage) => {
   Object.assign(order, pricing.calculateOrderTotals(order.items, order.discountPercent));
   appendHistory(order, { type: `${stage}_ADJUSTED`, actor, previousStatus: order.status, newStatus: order.status, itemChanges });
   try { await order.save(); } catch (error) { throw mapSaveError(error); }
+  await safelyNotifyOrderEvent({
+    eventType: stage === 'WHOLESALER' ? 'WHOLESALER_ORDER_ADJUSTED' : 'ADMIN_ORDER_ADJUSTED',
+    order,
+    recipientUserIds: stage === 'WHOLESALER' ? [order.retailer] : adminActionRecipients(order),
+  });
   return getOrderById(order._id, actor);
 };
 
@@ -216,6 +254,7 @@ const confirmAdminOrder = async (id, requestActor, testHooks = {}) => {
   const hooks = process.env.NODE_ENV === 'test' ? testHooks : {};
   const session = await mongoose.startSession();
   let confirmedOrderId;
+  let confirmationEvent;
 
   try {
     await session.withTransaction(async () => {
@@ -254,6 +293,16 @@ const confirmAdminOrder = async (id, requestActor, testHooks = {}) => {
       if (hooks.beforeOrderSave) await hooks.beforeOrderSave({ order, session });
       await order.save({ session });
       confirmedOrderId = order._id;
+      confirmationEvent = {
+        eventType: 'ADMIN_ORDER_CONFIRMED',
+        order: {
+          _id: order._id,
+          orderNumber: order.orderNumber,
+          status: order.status,
+          sourceRole: order.sourceRole,
+        },
+        recipientUserIds: adminActionRecipients(order),
+      };
     }, {
       readConcern: { level: 'snapshot' },
       writeConcern: { w: 'majority' },
@@ -268,6 +317,7 @@ const confirmAdminOrder = async (id, requestActor, testHooks = {}) => {
     await session.endSession();
   }
 
+  await safelyNotifyOrderEvent(confirmationEvent);
   return getOrderById(confirmedOrderId, actor);
 };
 
