@@ -52,9 +52,15 @@ const parseWorkbook = async (buffer) => {
     } else if (!blank(cells[map.get('TO SHELF')])) errors.push(issue(rowNumber, 'TO SHELF', 'UNEXPECTED_DESTINATION', 'TO SHELF is only allowed for TRANSFER', sku));
     rows.push({ rowNumber, sku, type, quantity: qty, shelf, toShelf });
   });
-  const seen = new Map();
-  rows.filter((r) => r.sku).forEach((r) => seen.set(r.sku, [...(seen.get(r.sku) || []), r.rowNumber]));
-  seen.forEach((numbers, sku) => { if (numbers.length > 1) numbers.forEach((n) => errors.push(issue(n, 'SKU', 'DUPLICATE_SKU', 'A SKU may appear only once in an import file', sku))); });
+  const operations = new Map();
+  rows.filter((row) => row.sku && row.type && row.quantity && row.shelf).forEach((row) => {
+    const signature = [row.sku, row.type, row.quantity, row.shelf, row.toShelf || ''].join('\u0000');
+    operations.set(signature, [...(operations.get(signature) || []), row]);
+  });
+  operations.forEach((duplicates) => {
+    if (duplicates.length < 2) return;
+    duplicates.forEach((row) => errors.push(issue(row.rowNumber, 'ROW', 'DUPLICATE_OPERATION', 'This exact inventory operation appears more than once', row.sku)));
+  });
   return { totalRows, rows, errors };
 };
 
@@ -86,10 +92,28 @@ const resolveRow = async (row) => {
   if (!variant.product || !variant.productColour?.colour || !variant.sizeSetRef) throw new ApiError(422, 'SKU is not linked to the finalized catalog');
   return resolvedFields(row, variant);
 };
-const stockError = (inventory, row) => {
-  if (row.type === 'ADD') return null;
-  const available = inventory?.shelves?.find((entry) => entry.shelf === row.shelf)?.quantity || 0;
-  return available < row.quantity ? `Insufficient stock on shelf ${row.shelf}. Available: ${available}` : null;
+const projectedBalances = (inventory) => new Map((inventory?.shelves || []).map(({ shelf, quantity }) => [shelf, quantity]));
+const projectAdjustment = (balances, row) => {
+  const source = balances.get(row.shelf) || 0;
+  if (row.type === 'ADD') {
+    const next = source + row.quantity;
+    if (!Number.isSafeInteger(next)) return 'Resulting stock quantity is too large';
+    balances.set(row.shelf, next);
+    return null;
+  }
+  if (source < row.quantity) return `Insufficient stock on shelf ${row.shelf}. Available: ${source}`;
+  const sourceAfter = source - row.quantity;
+  if (sourceAfter === 0) balances.delete(row.shelf); else balances.set(row.shelf, sourceAfter);
+  if (row.type === 'TRANSFER') {
+    const destination = balances.get(row.toShelf) || 0;
+    const next = destination + row.quantity;
+    if (!Number.isSafeInteger(next)) {
+      balances.set(row.shelf, source);
+      return 'Resulting stock quantity is too large';
+    }
+    balances.set(row.toShelf, next);
+  }
+  return null;
 };
 const formatBatch = (batch) => ({ id: batch._id, status: batch.status, totalRows: batch.totalRows, validRows: batch.validRows,
   invalidRows: batch.invalidRows, rows: batch.rows, errors: batch.errors, appliedAt: batch.appliedAt });
@@ -97,12 +121,19 @@ const formatBatch = (batch) => ({ id: batch._id, status: batch.status, totalRows
 const previewImport = async (buffer, { performedBy, originalName }) => {
   const parsed = await parseWorkbook(buffer); const errors = [...parsed.errors]; const rows = [];
   const bad = new Set(errors.filter((e) => e.rowNumber >= 2).map((e) => e.rowNumber));
+  const projections = new Map();
   if (!errors.some((e) => e.rowNumber === 1)) for (const row of parsed.rows) {
     if (bad.has(row.rowNumber)) continue;
     try {
-      const resolved = await resolveRow(row);
-      const inventory = resolved.skuId ? await Inventory.findOne({ variant: resolved.skuId }).lean() : null;
-      const message = stockError(inventory, row);
+      let projection = projections.get(row.sku);
+      if (!projection) {
+        const resolved = await resolveRow(row);
+        const inventory = resolved.skuId ? await Inventory.findOne({ variant: resolved.skuId }).lean() : null;
+        projection = { resolved, balances: projectedBalances(inventory) };
+        projections.set(row.sku, projection);
+      }
+      const resolved = { ...row, ...projection.resolved, rowNumber: row.rowNumber, type: row.type, quantity: row.quantity, shelf: row.shelf, toShelf: row.toShelf };
+      const message = projectAdjustment(projection.balances, row);
       if (message) errors.push(issue(row.rowNumber, 'QUANTITY', 'INSUFFICIENT_STOCK', message, row.sku)); else rows.push(resolved);
     } catch (e) { errors.push(issue(row.rowNumber, 'SKU', 'SKU_RESOLUTION_FAILED', e.message, row.sku)); }
   }
@@ -137,10 +168,25 @@ const applyImport = async (batchId, { performedBy, afterRowApplied } = {}) => {
       if (batch.status === 'APPLIED') throw new ApiError(409, 'Inventory import batch has already been applied');
       if (batch.status !== 'VALID') throw new ApiError(409, 'Only a valid preview batch can be applied');
       const variants = [];
-      for (const row of batch.rows) variants.push(await loadVariant(row, session));
+      const variantsBySku = new Map();
+      for (const row of batch.rows) {
+        let variant = variantsBySku.get(row.sku);
+        if (!variant) {
+          variant = await loadVariant(row, session);
+          variantsBySku.set(row.sku, variant);
+        }
+        variants.push(variant);
+      }
+      const applyProjections = new Map();
       for (let i = 0; i < batch.rows.length; i += 1) {
-        const inventory = await Inventory.findOne({ variant: variants[i]._id }).session(session).lean();
-        const message = stockError(inventory, batch.rows[i]);
+        const row = batch.rows[i];
+        let balances = applyProjections.get(row.sku);
+        if (!balances) {
+          const inventory = await Inventory.findOne({ variant: variants[i]._id }).session(session).lean();
+          balances = projectedBalances(inventory);
+          applyProjections.set(row.sku, balances);
+        }
+        const message = projectAdjustment(balances, row);
         if (message) throw new ApiError(409, `Preview is stale for SKU ${batch.rows[i].sku}: ${message}`);
       }
       const service = require('./inventory.service');

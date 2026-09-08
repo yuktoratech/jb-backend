@@ -69,9 +69,9 @@ test('Inventory Excel preview and atomic apply workflow', { timeout: 120000, ski
       assert.equal(await Ledger.countDocuments({ type: { $in: ['REMOVE', 'TRANSFER'] } }), 2);
     });
 
-    await t.test('row and header validation rejects duplicates, bad quantities, shelves, and stock', async () => {
-      const duplicate = await preview(workbook([blackSku.sku, 'ADD', 1, 'A', ''], [blackSku.sku.toUpperCase(), 'REMOVE', 1, 'A', '']));
-      assert.equal(duplicate.status, 'INVALID'); assert.equal(duplicate.invalidRows, 2); assert.ok(duplicate.errors.every((e) => e.code === 'DUPLICATE_SKU'));
+    await t.test('row and header validation rejects exact operations, bad quantities, shelves, and stock', async () => {
+      const duplicate = await preview(workbook([blackSku.sku, 'ADD', 1, 'A', ''], [blackSku.sku.toUpperCase(), 'add', 1, 'A', '']));
+      assert.equal(duplicate.status, 'INVALID'); assert.equal(duplicate.invalidRows, 2); assert.ok(duplicate.errors.every((e) => e.code === 'DUPLICATE_OPERATION'));
       const bad = await preview(workbook([blackSku.sku, 'TRANSFER', 0, 'A', 'A']));
       assert.equal(bad.status, 'INVALID'); assert.deepEqual(new Set(bad.errors.map((e) => e.code)), new Set(['INVALID_QUANTITY', 'SAME_SHELF']));
       const insufficient = await preview(workbook([blackSku.sku, 'REMOVE', 999, 'A', '']));
@@ -80,7 +80,36 @@ test('Inventory Excel preview and atomic apply workflow', { timeout: 120000, ski
       assert.equal(missingHeader.errors[0].code, 'MISSING_COLUMN');
     });
 
+    await t.test('repeated SKU operations use projected shelf balances and preserve workbook order', async () => {
+      await Inventory.updateOne({ variant: blackSku._id }, { $set: { shelves: [], availableQuantity: 0, totalQuantity: 0 } });
+      const batch = await preview(workbook(
+        [blackSku.sku, 'ADD', 5, 'A1', ''],
+        [blackSku.sku, 'TRANSFER', 3, 'A1', 'B1'],
+        [blackSku.sku, 'REMOVE', 2, 'B1', ''],
+        [blackSku.sku, 'ADD', 4, 'C1', ''],
+        [blackSku.sku, 'ADD', 2, 'C1', ''],
+        [blackSku.sku, 'TRANSFER', 1, 'C1', 'D1'],
+        [blackSku.sku, 'REMOVE', 1, 'D1', ''],
+      ));
+      assert.equal(batch.status, 'VALID'); assert.equal(batch.validRows, 7); assert.equal(batch.invalidRows, 0);
+      await service.applyImport(batch.id, { performedBy: admin._id });
+      assert.deepEqual(await stock(), [{ shelf: 'A1', quantity: 2 }, { shelf: 'B1', quantity: 1 }, { shelf: 'C1', quantity: 5 }]);
+      const operations = await Ledger.find({ referenceId: `IMPORT:${batch.id}` }).sort({ _id: 1 }).select('+operationKey').lean();
+      assert.deepEqual(operations.map(({ type }) => type), ['ADD', 'TRANSFER', 'REMOVE', 'ADD', 'ADD', 'TRANSFER', 'REMOVE']);
+      assert.deepEqual(operations.map(({ operationKey }) => operationKey), [2, 3, 4, 5, 6, 7, 8].map((rowNumber) => `IMPORT:${batch.id}:ROW:${rowNumber}`));
+    });
+
+    await t.test('later insufficient projected balance invalidates the whole batch', async () => {
+      const before = await stock(); const ledgers = await Ledger.countDocuments();
+      const batch = await preview(workbook([blackSku.sku, 'ADD', 1, 'Z1', ''], [blackSku.sku, 'REMOVE', 2, 'Z1', '']));
+      assert.equal(batch.status, 'INVALID'); assert.equal(batch.validRows, 1); assert.equal(batch.invalidRows, 1);
+      assert.equal(batch.errors[0].code, 'INSUFFICIENT_STOCK');
+      await assert.rejects(service.applyImport(batch.id, { performedBy: admin._id }), /Only a valid preview batch/);
+      assert.deepEqual(await stock(), before); assert.equal(await Ledger.countDocuments(), ledgers);
+    });
+
     await t.test('stale stock blocks apply without partial writes', async () => {
+      await Inventory.updateOne({ variant: blackSku._id }, { $set: { shelves: [{ shelf: 'A', quantity: 5 }], availableQuantity: 5, totalQuantity: 5 } });
       const batch = await preview(workbook([blackSku.sku, 'REMOVE', 5, 'A', '']));
       await Inventory.updateOne({ variant: blackSku._id }, { $set: { shelves: [{ shelf: 'A', quantity: 1 }], availableQuantity: 1, totalQuantity: 1 } });
       const beforeLedger = await Ledger.countDocuments();
