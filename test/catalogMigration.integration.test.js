@@ -324,6 +324,7 @@ test(
         User.create({
           name: 'Catalog Migration Admin',
           email: 'catalog.migration.admin@example.test',
+          phone: '9000000001',
           password: `Admin-${crypto.randomBytes(24).toString('base64url')}`,
           role: 'admin',
           status: 'active',
@@ -332,6 +333,7 @@ test(
         User.create({
           name: 'Catalog Migration Wholesaler',
           email: 'catalog.migration.wholesaler@example.test',
+          phone: '9000000002',
           password: `Wholesaler-${crypto.randomBytes(24).toString('base64url')}`,
           role: 'wholesaler',
           status: 'active',

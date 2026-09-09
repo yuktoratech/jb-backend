@@ -47,9 +47,34 @@ test(
       await mongoose.connection.dropDatabase();
 
       const adminPassword = `Admin-${crypto.randomBytes(24).toString('base64url')}`;
+      await assert.rejects(
+        User.create({
+          name: 'Phone-less Admin',
+          email: 'phone-less.admin@example.test',
+          password: adminPassword,
+          role: 'admin',
+          status: 'active',
+        }),
+        (error) => error?.errors?.phone?.kind === 'required',
+      );
+      const legacyAdminId = new mongoose.Types.ObjectId();
+      await mongoose.connection.db.collection('users').insertOne({
+        _id: legacyAdminId,
+        name: 'Legacy Phone-less Admin',
+        email: 'legacy.phone-less.admin@example.test',
+        password: 'legacy-hash-placeholder',
+        role: 'admin',
+        status: 'inactive',
+        discountPercent: 0,
+      });
+      const legacyAdmin = await User.findById(legacyAdminId);
+      legacyAdmin.lastLoginAt = new Date();
+      await legacyAdmin.save();
+      assert.equal((await User.findById(legacyAdminId).lean()).phone, undefined);
       const admin = await User.create({
         name: 'Accounts Admin',
         email: 'accounts.admin@example.test',
+        phone: '9000000001',
         password: adminPassword,
         role: 'admin',
         status: 'active',
@@ -108,6 +133,12 @@ test(
           body,
         });
 
+      const missingWholesalerPhone = await createWholesaler({
+        name: 'Missing Phone Wholesale',
+        email: 'missing.phone.wholesale@example.test',
+      });
+      assert.equal(missingWholesalerPhone.status, 400);
+
       const wholesalerACreation = await createWholesaler({
         name: 'Alpha Wholesale',
         email: 'alpha.wholesale@example.test',
@@ -163,6 +194,15 @@ test(
           token,
           body,
         });
+
+      const missingRetailerPhone = await createRetailer(
+        {
+          name: 'Missing Phone Retail',
+          email: 'missing.phone.retail@example.test',
+        },
+        wholesalerAToken,
+      );
+      assert.equal(missingRetailerPhone.status, 400);
 
       const retailerACreation = await createRetailer(
         {
@@ -305,13 +345,10 @@ test(
         token: wholesalerAToken,
         body: { discountPercent: 7, phone: null },
       });
-      assert.equal(retailerUpdate.status, 200);
-      assert.equal(retailerUpdate.body.data.discountPercent, 7);
-      assert.equal(retailerUpdate.body.data.phone, undefined);
-      assert.equal(
-        retailerUpdate.body.data.parentWholesaler._id,
-        wholesalerA._id,
-      );
+      assert.equal(retailerUpdate.status, 400);
+      const retailerAfterRejectedUpdate = await User.findById(retailerA._id).lean();
+      assert.equal(retailerAfterRejectedUpdate.discountPercent, 5);
+      assert.equal(retailerAfterRejectedUpdate.phone, '9999999999');
 
       const forbiddenParentSubmission = await createRetailer(
         {
@@ -344,15 +381,16 @@ test(
           token: adminToken,
           body: {
             name: 'Alpha Wholesale Updated',
-            phone: null,
+            phone: '   ',
             discountPercent: 12,
           },
         },
       );
-      assert.equal(wholesalerUpdate.status, 200);
-      assert.equal(wholesalerUpdate.body.data.name, 'Alpha Wholesale Updated');
-      assert.equal(wholesalerUpdate.body.data.discountPercent, 12);
-      assert.equal(wholesalerUpdate.body.data.phone, undefined);
+      assert.equal(wholesalerUpdate.status, 400);
+      const wholesalerAfterRejectedUpdate = await User.findById(wholesalerA._id).lean();
+      assert.equal(wholesalerAfterRejectedUpdate.name, 'Alpha Wholesale');
+      assert.equal(wholesalerAfterRejectedUpdate.discountPercent, 10);
+      assert.equal(wholesalerAfterRejectedUpdate.phone, '9876543210');
 
       const deactivateWholesaler = await request(
         `/wholesalers/${wholesalerA._id}/status`,

@@ -49,7 +49,7 @@ test('FCM device ownership and finalized Order notification recipients', { timeo
     await mongoose.connection.dropDatabase();
     const password = 'Push-Test-1!';
     const [admin, wholesaler, otherWholesaler] = await User.create([
-      { name: 'Admin', email: 'push-admin@example.test', password, role: 'admin', status: 'active' },
+      { name: 'Admin', email: 'push-admin@example.test', phone: '9000000001', password, role: 'admin', status: 'active' },
       { name: 'Wholesaler', email: 'push-wholesaler@example.test', phone: '9876543210', password, role: 'wholesaler', status: 'active', discountPercent: 10 },
       { name: 'Other Wholesaler', email: 'push-other-wholesaler@example.test', phone: '9876543211', password, role: 'wholesaler', status: 'active' },
     ]);

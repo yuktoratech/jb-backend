@@ -4,6 +4,8 @@
 
 `role`, `name`, `phone`, `emailNormalized`, `passwordHash`,
 `wholesalerId` for Retailer, `discountPercent`, `status`, timestamps.
+Name, phone and normalized email are mandatory identity fields and cannot be
+cleared by update.
 
 ## Category / SubCategory
 
@@ -29,8 +31,9 @@ parsing the label at runtime.
 
 ## SKU
 
-`productId`, `productColourId`, `sizeSetId`, `sku`, `status`. SKU
-unique, lowercase, immutable.
+`productId`, `productColourId`, `sizeSetId`, `sku`, `status`. Every new SKU
+is backend-generated, unique, lowercase and immutable; caller input is never
+authoritative. Existing persisted immutable SKUs are grandfathered.
 
 ## ShelfInventory
 
@@ -57,7 +60,10 @@ collect/store multiple addresses is currently locked.
 
 Each order item snapshots product name, colour, Size Set, explicit
 sizes, pieces/set, MRP/piece, Set MRP, original/current Set quantity,
-original/current piece quantity and line financials.
+original/current piece quantity and original/current line gross. The Order
+stores the discount/GST percentage snapshots and authoritative current
+order-level gross, discount, taxable, GST and final totals. Discount and GST
+round at order level; no per-line allocation is defined.
 
 ## OrderAudit
 
@@ -65,8 +71,11 @@ Recommended append-only audit of status and item adjustments.
 
 ## ImportBatch
 
-filename, uploader, status, row/valid/error counts, validation errors,
-timestamps.
+For inventory imports: original filename, file hash, uploader, status,
+row/valid/error counts, normalized read-only preview rows, validation errors,
+applied-by/applied-at data and timestamps. Preview validation processes
+projected balances in workbook order; Apply atomically revalidates and uses
+the previewed operations.
 
 ## Important indexes
 

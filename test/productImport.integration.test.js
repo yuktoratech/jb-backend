@@ -39,8 +39,8 @@ test('finalized Product XLSX preview/apply is validated, persisted, and atomic',
     const hello = await mongoose.connection.db.admin().command({ hello: 1 });
     const transactionCapable = Boolean(hello.setName || hello.msg === 'isdbgrid');
     await mongoose.connection.dropDatabase();
-    const admin = await User.create({ name: 'Import Admin', email: 'product-import@example.test', password: 'Product-Import-1!', role: 'admin', status: 'active' });
-    const otherAdmin = await User.create({ name: 'Other Admin', email: 'other-product-import@example.test', password: 'Product-Import-2!', role: 'admin', status: 'active' });
+    const admin = await User.create({ name: 'Import Admin', email: 'product-import@example.test', phone: '9000000001', password: 'Product-Import-1!', role: 'admin', status: 'active' });
+    const otherAdmin = await User.create({ name: 'Other Admin', email: 'other-product-import@example.test', phone: '9000000002', password: 'Product-Import-2!', role: 'admin', status: 'active' });
     const category = await Category.create({ name: 'Jeans', slug: 'jeans', status: 'active' });
     const otherCategory = await Category.create({ name: 'Shirts', slug: 'shirts', status: 'active' });
     await Promise.all([

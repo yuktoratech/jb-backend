@@ -153,8 +153,9 @@ const loadVariant = async (row, session) => {
   if (variant) throw new ApiError(409, `SKU ${row.sku} was created after preview`);
   const pc = await ProductColour.findOne({ _id: row.productColourId, product: row.productId, status: 'active' }).populate('product colour').session(session);
   const set = await SizeSet.findOne({ _id: row.sizeSetId, status: 'active' }).session(session);
-  if (!pc || pc.product?.status !== 'active' || pc.colour?.status !== 'active' || !set || generateSku(pc.productCode, set.label) !== row.sku) throw new ApiError(409, `Catalog resolution changed for SKU ${row.sku}`);
-  [variant] = await ProductVariant.create([{ catalogVersion: 2, product: row.productId, productColour: row.productColourId, sizeSetRef: row.sizeSetId, sku: row.sku, status: 'active' }], { session });
+  const generatedSku = pc && set ? generateSku(pc.productCode, set.label) : null;
+  if (!pc || pc.product?.status !== 'active' || pc.colour?.status !== 'active' || !set || generatedSku !== row.sku) throw new ApiError(409, `Catalog resolution changed for SKU ${row.sku}`);
+  [variant] = await ProductVariant.create([{ catalogVersion: 2, product: row.productId, productColour: row.productColourId, sizeSetRef: row.sizeSetId, sku: generatedSku, status: 'active' }], { session });
   await Inventory.create([{ variant: variant._id, sku: variant.sku, shelves: [] }], { session });
   return variant;
 };

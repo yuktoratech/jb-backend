@@ -123,7 +123,7 @@ const updateWholesalerStatus = async (wholesalerId, status) => {
     if (pendingRetailerOrder) {
       throw new ApiError(
         409,
-        'Wholesaler has Retailer orders awaiting approval; confirm or reject them before deactivation',
+        'Wholesaler has Retailer orders awaiting approval; forward or cancel them before deactivation',
       );
     }
   }

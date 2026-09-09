@@ -109,6 +109,8 @@ test('finalized Order state machine and pricing snapshots are enforced', { timeo
     assert.equal(direct.body.data.items[0].originalSetQty, 3);
     assert.equal(direct.body.data.items[0].originalPieceQty, 15);
     assert.equal(direct.body.data.items[0].currentPieceQty, 15);
+    assert.equal(direct.body.data.items[0].originalLineGrossMinor, 1500000);
+    assert.equal(direct.body.data.items[0].currentLineGrossMinor, 1500000);
     assert.equal(direct.body.data.inventoryStatus, undefined);
     await assertInventoryUnchanged();
 
@@ -159,12 +161,23 @@ test('finalized Order state machine and pricing snapshots are enforced', { timeo
     assert.equal(adjustedBlack.currentSetQty, 2);
     assert.equal(adjustedBlack.currentPieceQty, 10);
     assert.equal(adjustedBlack.mrpPerPieceMinor, 100000);
+    assert.equal(adjustedBlack.originalLineGrossMinor, 1500000);
+    assert.equal(adjustedBlack.currentLineGrossMinor, 1000000);
     assert.equal(removedBlue.originalSetQty, 2);
     assert.equal(removedBlue.currentSetQty, 0);
+    assert.equal(removedBlue.originalLineGrossMinor, 1000000);
+    assert.equal(removedBlue.currentLineGrossMinor, 0);
     assert.equal(removedBlue.isRemoved, true);
     assert.equal(wholesalerAdjusted.body.data.discountPercent, 20);
     assert.equal(wholesalerAdjusted.body.data.grossAmountMinor, 1000000);
     assert.equal(wholesalerAdjusted.body.data.finalAmountMinor, 840000);
+    assert.deepEqual(
+      wholesalerAdjusted.body.data.history.at(-1).itemChanges.map(({ sku, beforeSetQty, afterSetQty }) => ({ sku, beforeSetQty, afterSetQty })),
+      [
+        { sku: blackSku.sku, beforeSetQty: 3, afterSetQty: 2 },
+        { sku: blueSku.sku, beforeSetQty: 2, afterSetQty: 0 },
+      ],
+    );
 
     const addAttempt = await request(`/orders/${adjustable.body.data._id}/wholesaler-adjust`, { method: 'PATCH', token: tokens.wholesaler, body: { items: [{ orderItemId: new mongoose.Types.ObjectId(), setQuantity: 1 }] } });
     assert.equal(addAttempt.status, 400);
@@ -174,6 +187,8 @@ test('finalized Order state machine and pricing snapshots are enforced', { timeo
     assert.equal(adminAdjusted.status, 200);
     assert.equal(adminAdjusted.body.data.items.find(({ sku }) => sku === blackSku.sku).originalSetQty, 3);
     assert.equal(adminAdjusted.body.data.items.find(({ sku }) => sku === blackSku.sku).currentPieceQty, 5);
+    assert.equal(adminAdjusted.body.data.items.find(({ sku }) => sku === blackSku.sku).originalLineGrossMinor, 1500000);
+    assert.equal(adminAdjusted.body.data.items.find(({ sku }) => sku === blackSku.sku).currentLineGrossMinor, 500000);
     assert.equal(adminAdjusted.body.data.finalAmountMinor, 420000);
     await assertInventoryUnchanged();
 

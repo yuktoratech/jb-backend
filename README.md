@@ -1,5 +1,35 @@
 # jb-backend
 
+Node.js API for the Just BLACK B2B Admin, Wholesaler, and Retailer
+workflows. MongoDB transactions are required for atomic inventory imports
+and final Admin order confirmation.
+
+## Account and password-recovery configuration
+
+Copy `.env.example` to `.env` and provide real environment-specific values.
+`ADMIN_NAME`, `ADMIN_EMAIL`, `ADMIN_PHONE`, and `ADMIN_PASSWORD` are all
+required by `npm run seed:admin`; the seed never invents an identity value.
+
+Password recovery stores only a short-lived token hash and delivers the
+one-time reset link by email. Configure `PASSWORD_RESET_URL`, `EMAIL_FROM`,
+and the `SMTP_*` variables documented in `.env.example`. Order-event email
+is not implemented; those notifications remain Firebase push only.
+
+## Finalized Inventory XLSX import
+
+Admin-only endpoints:
+
+- `POST /api/v1/inventory/imports/preview` — uploads an XLSX workbook and
+  persists its read-only, server-authoritative preview.
+- `POST /api/v1/inventory/imports/:batchId/apply` — revalidates and applies a
+  valid preview atomically.
+
+The Admin workflow is Upload -> Preview -> Verify -> Apply. Rows are handled
+in workbook order against projected shelf balances. Repeated SKUs are valid;
+only exact normalized duplicate operations are rejected with
+`DUPLICATE_OPERATION`. Any invalid row blocks the complete batch. There is no
+manual stock-adjustment form in the Admin frontend.
+
 ## Finalized Product Listing XLSX import
 
 Admin-only endpoints:

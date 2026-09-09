@@ -170,6 +170,7 @@ test('inventory APIs keep shelf stock and transaction history consistent', {
       User.create({
         name: 'Inventory Admin',
         email: 'inventory.admin@example.test',
+        phone: '9000000001',
         password: adminPassword,
         role: 'admin',
         status: 'active',
@@ -178,6 +179,7 @@ test('inventory APIs keep shelf stock and transaction history consistent', {
       User.create({
         name: 'Inventory Wholesaler',
         email: 'inventory.wholesaler@example.test',
+        phone: '9000000002',
         password: wholesalerPassword,
         role: 'wholesaler',
         status: 'active',
@@ -192,6 +194,7 @@ test('inventory APIs keep shelf stock and transaction history consistent', {
     const retailer = await User.create({
       name: 'Inventory Retailer',
       email: 'inventory.retailer@example.test',
+      phone: '9000000003',
       password: retailerPassword,
       role: 'retailer',
       status: 'active',

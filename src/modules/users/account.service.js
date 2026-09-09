@@ -54,8 +54,8 @@ const createManagedAccount = async ({
   parentWholesaler = null,
   discountPercent = 0,
 }) => {
-  if (['wholesaler', 'retailer'].includes(role) && !phone) {
-    throw new ApiError(400, 'Phone is required for Wholesaler and Retailer accounts');
+  if (!phone) {
+    throw new ApiError(400, 'Phone is required');
   }
   await User.init();
   await ensureEmailAvailable(email);

@@ -30,7 +30,7 @@ test('Auth completion and security controls', { timeout: 120000, skip: !URI && '
     await mongoose.connection.dropDatabase();
     const originalPassword = 'OriginalPass1';
     const [admin, wholesaler] = await User.create([
-      { name: 'Auth Admin', email: 'auth-admin@example.test', password: originalPassword, role: 'admin', status: 'active' },
+      { name: 'Auth Admin', email: 'auth-admin@example.test', phone: '9000000001', password: originalPassword, role: 'admin', status: 'active' },
       { name: 'Auth Wholesaler', email: 'auth-wholesaler@example.test', phone: '9876543210', password: originalPassword, role: 'wholesaler', status: 'active' },
     ]);
     server = app.listen(0, '127.0.0.1');
@@ -47,11 +47,18 @@ test('Auth completion and security controls', { timeout: 120000, skip: !URI && '
 
     let delivered;
     delivery.setPasswordResetDeliveryHandler(async (payload) => { delivered = payload; });
+    const waitForDelivery = async () => {
+      for (let attempt = 0; attempt < 20 && !delivered; attempt += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      assert.ok(delivered, 'Password reset delivery was not dispatched');
+      return delivered;
+    };
 
     await t.test('forgot response hides existence and stores only an expiring hash', async () => {
       const known = await post('/auth/forgot-password', { email: wholesaler.email });
       const knownMessage = known.body.message;
-      assert.equal(known.status, 200); assert.ok(delivered?.token); assert.equal(delivered.token.length, 64);
+      assert.equal(known.status, 200); await waitForDelivery(); assert.equal(delivered.token.length, 64);
       const stored = await User.findById(wholesaler._id).select('+passwordResetTokenHash +passwordResetExpiresAt').lean();
       assert.equal(stored.passwordResetTokenHash, hash(delivered.token)); assert.notEqual(stored.passwordResetTokenHash, delivered.token);
       assert.ok(stored.passwordResetExpiresAt > new Date());
@@ -63,6 +70,7 @@ test('Auth completion and security controls', { timeout: 120000, skip: !URI && '
 
     await t.test('valid reset changes password and token cannot be reused', async () => {
       await post('/auth/forgot-password', { email: wholesaler.email });
+      await waitForDelivery();
       const token = delivered.token; const nextPassword = 'ResetPassword2';
       const reset = await post('/auth/reset-password', { token, newPassword: nextPassword });
       assert.equal(reset.status, 200);

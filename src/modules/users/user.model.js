@@ -25,6 +25,12 @@ const userSchema = new mongoose.Schema(
     },
     phone: {
       type: String,
+      required: [
+        function phoneIsRequired() {
+          return this.isNew || typeof this.isModified !== 'function' || this.isModified('phone');
+        },
+        'Phone is required',
+      ],
       set: normalizePhone,
       validate: {
         validator: isValidPhone,

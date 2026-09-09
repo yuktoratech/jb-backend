@@ -39,10 +39,10 @@ test('Admin final confirmation is one atomic stock transaction', { timeout: 1200
 
     const password = 'Confirmation-Test-1!';
     const [admin, wholesaler] = await User.create([
-      { name: 'Admin', email: 'confirm-admin@example.test', password, role: 'admin', status: 'active' },
-      { name: 'Wholesaler', email: 'confirm-wholesaler@example.test', password, role: 'wholesaler', status: 'active', discountPercent: 10 },
+      { name: 'Admin', email: 'confirm-admin@example.test', phone: '9000000001', password, role: 'admin', status: 'active' },
+      { name: 'Wholesaler', email: 'confirm-wholesaler@example.test', phone: '9000000002', password, role: 'wholesaler', status: 'active', discountPercent: 10 },
     ]);
-    const retailer = await User.create({ name: 'Retailer', email: 'confirm-retailer@example.test', password, role: 'retailer', status: 'active', parentWholesaler: wholesaler._id, discountPercent: 12 });
+    const retailer = await User.create({ name: 'Retailer', email: 'confirm-retailer@example.test', phone: '9000000003', password, role: 'retailer', status: 'active', parentWholesaler: wholesaler._id, discountPercent: 12 });
     const category = await Category.create({ name: 'Confirmation Category', slug: 'confirmation-category', status: 'active' });
     const subCategory = await SubCategory.create({ category: category._id, name: 'Confirmation Subcategory', slug: 'confirmation-subcategory', status: 'active' });
     const [fit, fabric, black, blue, sizeSet] = await Promise.all([

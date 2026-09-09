@@ -388,7 +388,7 @@ const createProduct = async (payload) => {
           product: product._id,
           productColour: colourDocs[index]._id,
           sizeSetRef: sizeSet._id,
-          sku: skuInput.sku || generateSku(entry.productCode, sizeSet.label),
+          sku: generateSku(entry.productCode, sizeSet.label),
           status: skuInput.status || 'active',
         });
       });

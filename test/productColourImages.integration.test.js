@@ -44,7 +44,7 @@ test('ProductColour image objects use provider-neutral storage safely', { timeou
     await mongoose.connect(URI); await mongoose.connection.dropDatabase();
     const password = 'Image-Test-1!';
     const [admin, wholesaler] = await User.create([
-      { name: 'Image Admin', email: 'image-admin@example.test', password, role: 'admin', status: 'active' },
+      { name: 'Image Admin', email: 'image-admin@example.test', phone: '9000000001', password, role: 'admin', status: 'active' },
       { name: 'Image Wholesale', email: 'image-wholesale@example.test', phone: '9876543210', password, role: 'wholesaler', status: 'active' },
     ]);
     const category = await Category.create({ name: 'Image Category', slug: 'image-category' });

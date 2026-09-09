@@ -30,7 +30,7 @@ const updateRetailerBodySchema = z
   .object({
     name: nameSchema.optional(),
     email: emailSchema.optional(),
-    phone: phoneSchema.nullable().optional(),
+    phone: phoneSchema.optional(),
     discountPercent: discountPercentSchema.optional(),
   })
   .strict()

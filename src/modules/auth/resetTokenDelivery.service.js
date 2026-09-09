@@ -1,4 +1,6 @@
-let deliveryHandler = async () => undefined;
+const { deliverPasswordResetEmail } = require('./smtpPasswordReset.provider');
+
+let deliveryHandler = deliverPasswordResetEmail;
 
 const deliverPasswordResetToken = (delivery) => deliveryHandler(delivery);
 
@@ -8,7 +10,7 @@ const setPasswordResetDeliveryHandler = (handler) => {
 };
 
 const resetPasswordResetDeliveryHandler = () => {
-  deliveryHandler = async () => undefined;
+  deliveryHandler = deliverPasswordResetEmail;
 };
 
 module.exports = { deliverPasswordResetToken, resetPasswordResetDeliveryHandler, setPasswordResetDeliveryHandler };

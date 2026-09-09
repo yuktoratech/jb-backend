@@ -44,6 +44,7 @@ test(
         {
           name: 'Catalog Admin',
           email: 'catalog.admin@example.test',
+          phone: '9000000001',
           password: adminPassword,
           role: 'admin',
           status: 'active',
@@ -51,6 +52,7 @@ test(
         {
           name: 'Catalog Wholesaler',
           email: 'catalog.wholesaler@example.test',
+          phone: '9000000002',
           password: wholesalerPassword,
           role: 'wholesaler',
           status: 'active',

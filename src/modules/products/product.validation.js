@@ -1,5 +1,5 @@
 const { z } = require('zod');
-const { normalizeProductCode, normalizeSku } = require('../../utils/sku');
+const { normalizeProductCode } = require('../../utils/sku');
 
 const objectId = (label) => z.string({ error: `${label} is required` }).trim().regex(/^[a-f\d]{24}$/i, `A valid ${label.toLowerCase()} is required`);
 const requiredText = (label, max) => z.string({ error: `${label} is required` }).trim().min(1, `${label} is required`).max(max, `${label} cannot exceed ${max} characters`).transform((value) => value.replace(/\s+/g, ' '));
@@ -8,10 +8,7 @@ const status = z.enum(['active', 'inactive'], { error: 'Status must be active or
 const productCode = requiredText('Product code', 100).transform((value, context) => {
   try { return normalizeProductCode(value); } catch (error) { context.addIssue({ code: 'custom', message: error.message }); return z.NEVER; }
 });
-const manualSku = requiredText('SKU', 255).transform((value, context) => {
-  try { return normalizeSku(value); } catch (error) { context.addIssue({ code: 'custom', message: error.message }); return z.NEVER; }
-});
-const skuInput = z.object({ sizeSetId: objectId('SizeSet ID'), sku: manualSku.optional(), status: status.optional() }).strict();
+const skuInput = z.object({ sizeSetId: objectId('SizeSet ID'), status: status.optional() }).strict();
 const productColourInput = z
   .object({
     colourId: objectId('Colour ID'),
@@ -46,15 +43,10 @@ const createProductBody = z
   .superRefine((value, context) => {
     const colours = new Set();
     const codes = new Set();
-    const skus = new Set();
     value.productColours.forEach((entry, colourIndex) => {
       if (colours.has(entry.colourId)) context.addIssue({ code: 'custom', path: ['productColours', colourIndex, 'colourId'], message: 'Duplicate Colours are not allowed' });
       if (codes.has(entry.productCode)) context.addIssue({ code: 'custom', path: ['productColours', colourIndex, 'productCode'], message: 'Duplicate Product Codes are not allowed' });
       colours.add(entry.colourId); codes.add(entry.productCode);
-      entry.skus.forEach((sku, skuIndex) => {
-        if (sku.sku && skus.has(sku.sku)) context.addIssue({ code: 'custom', path: ['productColours', colourIndex, 'skus', skuIndex, 'sku'], message: 'Duplicate manual SKUs are not allowed' });
-        if (sku.sku) skus.add(sku.sku);
-      });
     });
   });
 
@@ -70,7 +62,7 @@ const updateProductBody = z.object({
 }).strict().refine((body) => Object.keys(body).length > 0, { message: 'At least one field is required' });
 
 const pagination = { page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(20) };
-const createSkuBody = z.object({ productColourId: objectId('ProductColour ID'), sizeSetId: objectId('SizeSet ID'), sku: manualSku.optional(), status: status.optional() }).strict();
+const createSkuBody = z.object({ productColourId: objectId('ProductColour ID'), sizeSetId: objectId('SizeSet ID'), status: status.optional() }).strict();
 
 module.exports = {
   createProductSchema: { body: createProductBody },

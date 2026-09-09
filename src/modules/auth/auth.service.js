@@ -16,6 +16,21 @@ const resetTtlMinutes = () => {
 };
 const hashResetToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
 
+const dispatchPasswordResetToken = (delivery) => {
+  setImmediate(() => {
+    Promise.resolve()
+      .then(() => deliverPasswordResetToken(delivery))
+      .catch((error) => {
+        // Keep delivery details and the token out of logs while still making
+        // transport failures visible to operators.
+        console.error('Password reset email delivery failed', {
+          name: error?.name || 'Error',
+          code: error?.code || 'PASSWORD_RESET_DELIVERY_FAILED',
+        });
+      });
+  });
+};
+
 const login = async ({ email, password }) => {
   const user = await User.findOne({ email }).select('+password');
 
@@ -65,11 +80,9 @@ const forgotPassword = async ({ email }) => {
     { _id: user._id },
     { $set: { passwordResetTokenHash: hashResetToken(token), passwordResetExpiresAt: expiresAt } },
   );
-  try {
-    await deliverPasswordResetToken({ userId: user._id, email: user.email, token, expiresAt });
-  } catch (error) {
-    // Delivery is deliberately decoupled. Its availability must not reveal account existence.
-  }
+  // SMTP latency and availability stay outside the generic response path so
+  // they cannot become an account-enumeration signal.
+  dispatchPasswordResetToken({ userId: user._id, email: user.email, token, expiresAt });
   return { message: RESET_RESPONSE };
 };
 

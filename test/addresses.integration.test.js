@@ -34,11 +34,11 @@ test('Saved Addresses are owner-scoped and Orders retain immutable snapshots', {
     await mongoose.connection.dropDatabase();
     const password = 'Address-Test-1!';
     const [admin, wholesaler, otherWholesaler] = await User.create([
-      { name: 'Admin', email: 'address-admin@example.test', password, role: 'admin', status: 'active' },
-      { name: 'Wholesaler', email: 'address-wholesaler@example.test', password, role: 'wholesaler', status: 'active', discountPercent: 10 },
-      { name: 'Other Wholesaler', email: 'address-other@example.test', password, role: 'wholesaler', status: 'active', discountPercent: 5 },
+      { name: 'Admin', email: 'address-admin@example.test', phone: '9000000001', password, role: 'admin', status: 'active' },
+      { name: 'Wholesaler', email: 'address-wholesaler@example.test', phone: '9000000002', password, role: 'wholesaler', status: 'active', discountPercent: 10 },
+      { name: 'Other Wholesaler', email: 'address-other@example.test', phone: '9000000003', password, role: 'wholesaler', status: 'active', discountPercent: 5 },
     ]);
-    const retailer = await User.create({ name: 'Retailer', email: 'address-retailer@example.test', password, role: 'retailer', status: 'active', parentWholesaler: wholesaler._id, discountPercent: 12 });
+    const retailer = await User.create({ name: 'Retailer', email: 'address-retailer@example.test', phone: '9000000004', password, role: 'retailer', status: 'active', parentWholesaler: wholesaler._id, discountPercent: 12 });
     const category = await Category.create({ name: 'Address Category', slug: 'address-category' });
     const sub = await SubCategory.create({ category: category._id, name: 'Address Sub', slug: 'address-sub' });
     const [fit, fabric, colour, set] = await Promise.all([

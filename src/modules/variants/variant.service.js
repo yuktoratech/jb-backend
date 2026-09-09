@@ -58,7 +58,7 @@ const createVariant = async (productId, payload) => {
   if (!product) throw new ApiError(404, 'Active finalized Product not found');
   if (!productColour) throw new ApiError(404, 'Active ProductColour for the Product not found');
   if (!sizeSet) throw new ApiError(404, 'Active SizeSet not found');
-  const sku = payload.sku ? normalizeSku(payload.sku) : generateSku(productColour.productCode, sizeSet.label);
+  const sku = generateSku(productColour.productCode, sizeSet.label);
   await Promise.all([ProductVariant.init(), Inventory.init()]);
   const session = await mongoose.startSession();
   let variant;

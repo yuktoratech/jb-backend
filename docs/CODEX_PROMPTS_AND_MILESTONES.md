@@ -15,15 +15,17 @@ Do not implement business logic until you have reported conflicts.
 ## Catalog prompt
 
 Implement Product, Colour, Size Set and immutable SKU management
-according to the docs. Include colour-level images, MRP per piece,
-dynamic masters, validation, indexes and tests.
+according to the docs. The backend generates every new lowercase SKU and
+rejects caller attempts to choose it. Include colour-level images, MRP per
+piece, dynamic masters, validation, indexes and tests.
 
 ## Inventory prompt
 
-Implement inventory according to the docs: SKU+shelf balances,
-ADD/REMOVE/TRANSFER, no negative stock, ledger, Excel
-validate/preview/apply, and missing Size Set/SKU creation only under an
-existing Product+Colour.
+Implement inventory according to the docs: SKU+shelf balances, no negative
+stock, ledger, and the Admin XLSX-only Upload/read-only Preview/Verify/Apply
+workflow. Process ADD/REMOVE/TRANSFER rows in workbook order against
+projected balances, allow repeated SKUs, reject exact normalized duplicate
+operations, block any invalid batch, and apply atomically.
 
 ## Order prompt
 
@@ -72,12 +74,12 @@ Suggested client approval text:
 5.  Object-storage image upload.
 6.  Wholesaler management + discount.
 7.  Shelf inventory + ledger.
-8.  Manual ADD/REMOVE/TRANSFER.
-9.  Excel validation/preview/apply.
+8.  XLSX-only ADD/REMOVE/TRANSFER preview/verify/apply.
+9.  Operational Admin dashboard and queues.
 10. Order model and workflows.
 11. Atomic Admin confirmation.
 12. Push backend integration.
-13. Admin screens.
+13. Admin screens and email password recovery.
 14. Initial migration and validation.
 
 # Milestone 5

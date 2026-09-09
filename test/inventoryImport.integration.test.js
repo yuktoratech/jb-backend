@@ -30,7 +30,7 @@ test('Inventory Excel preview and atomic apply workflow', { timeout: 120000, ski
   try {
     assert.ok((await mongoose.connection.db.admin().command({ hello: 1 })).setName);
     await mongoose.connection.dropDatabase();
-    const admin = await User.create({ name: 'Import Admin', email: 'import@example.test', password: 'Import-Test-1!', role: 'admin', status: 'active' });
+    const admin = await User.create({ name: 'Import Admin', email: 'import@example.test', phone: '9000000001', password: 'Import-Test-1!', role: 'admin', status: 'active' });
     const category = await Category.create({ name: 'Import Category', slug: 'import-category', status: 'active' });
     const subCategory = await SubCategory.create({ category: category._id, name: 'Import Sub', slug: 'import-sub', status: 'active' });
     const [fit, fabric, black, blue, set] = await Promise.all([
