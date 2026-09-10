@@ -1,0 +1,50 @@
+{
+  "scope": "LOCAL_UAT_ONLY",
+  "accounts": {
+    "wholesaler": {
+      "name": "UAT Wholesaler 26",
+      "email": "uat.wholesaler26@example.com",
+      "phone": "+919000000026",
+      "discountPercent": 10
+    },
+    "retailer": {
+      "name": "UAT Retailer 26",
+      "email": "uat.retailer26@example.com",
+      "phone": "+919100000026",
+      "discountPercent": 15
+    }
+  },
+  "masters": {
+    "categories": [
+      { "name": "UATTOPS", "sizeFamily": "ALPHA", "subCategory": "UATSHIRTS" },
+      { "name": "UATBOTTOMS", "sizeFamily": "NUMERIC", "subCategory": "UATJEANS" }
+    ],
+    "colours": ["UATBLACK", "UATNAVY", "UATBLUE"],
+    "fits": ["UATREGULAR", "UATSLIM"],
+    "fabrics": ["UATCOTTON", "UATDENIM"]
+  },
+  "expectedIdentifiers": [
+    {
+      "product": "UATTEE26",
+      "colour": "UATBLACK",
+      "productCode": "UATTEE26_UATBLACK",
+      "sizeSet": "S-XL",
+      "sku": "UATTEE26_UATBLACK_S-XL"
+    },
+    {
+      "product": "UATTEE26",
+      "colour": "UATNAVY",
+      "productCode": "UATTEE26_UATNAVY",
+      "sizeSet": "M-2XL",
+      "sku": "UATTEE26_UATNAVY_M-2XL"
+    },
+    {
+      "product": "UATJEAN26",
+      "colour": "UATBLUE",
+      "productCode": "UATJEAN26_UATBLUE",
+      "sizeSet": "30-36",
+      "sku": "UATJEAN26_UATBLUE_30-36"
+    }
+  ]
+}
+

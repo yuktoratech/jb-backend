@@ -1,0 +1,161 @@
+# JB B2B Local UAT Guide
+
+This package is for local/manual UAT only. Do not use these identities or data
+in production. Run the Admin at `http://192.168.1.28:3000` and the backend at
+`http://192.168.1.28:5051/api/v1` while testing from the same LAN.
+
+## Files
+
+- `test-data.json`: canonical test data and expected identifiers.
+- `01-product-import-valid.xlsx`: valid Product import workbook.
+- `02-inventory-import-valid.xlsx`: valid ordered Inventory adjustments.
+- `03-product-import-invalid.xlsx`: intentionally invalid Product workbook.
+- `04-inventory-import-invalid.xlsx`: intentionally invalid Inventory workbook.
+
+## 1. Preconditions
+
+1. Use a local/test database only.
+2. Log in with the existing local Admin account.
+3. Confirm the Admin and backend health pages load.
+4. Do not run the uppercase or slug-cleanup migrations as part of this UAT.
+5. If the same `UAT...` records already exist, archive/delete the test records
+   where the UI allows it, or use a fresh guarded test database.
+
+## 2. Account hierarchy test data
+
+Create the Wholesaler through Admin:
+
+| Field | Value |
+|---|---|
+| Name | UAT Wholesaler 26 |
+| Email | uat.wholesaler26@example.com |
+| Phone | +919000000026 |
+| Discount | 10 |
+
+The system generates a temporary password. Copy it only for this local test;
+do not store it in this package.
+
+Using the Wholesaler client or approved authenticated API flow, create its
+Retailer. Admin must not create the Retailer; this is a hierarchy check. If the
+Wholesaler/mobile client is not available yet, defer this step instead of
+creating the Retailer as Admin:
+
+| Field | Value |
+|---|---|
+| Name | UAT Retailer 26 |
+| Email | uat.retailer26@example.com |
+| Phone | +919100000026 |
+| Discount | 15 |
+
+Verify that Admin can see both accounts, the Retailer belongs only to the UAT
+Wholesaler, and active/inactive status changes are reflected correctly.
+
+## 3. Catalog master setup
+
+Create these active masters before Product import:
+
+| Master | Name | Additional value |
+|---|---|---|
+| Category | UATTOPS | Size family: ALPHA |
+| Sub-category | UATSHIRTS | Category: UATTOPS |
+| Category | UATBOTTOMS | Size family: NUMERIC |
+| Sub-category | UATJEANS | Category: UATBOTTOMS |
+| Colour | UATBLACK | Active |
+| Colour | UATNAVY | Active |
+| Colour | UATBLUE | Active |
+| Fit | UATREGULAR | Active |
+| Fit | UATSLIM | Active |
+| Fabric | UATCOTTON | Active |
+| Fabric | UATDENIM | Active |
+
+Each Category must have exactly one active Sub-category because the approved
+client Product workbook does not include a Sub-category column.
+
+Verify master API/UI responses contain names and IDs but no `slug` field.
+
+## 4. Valid Product import
+
+1. Open Admin -> Products -> Import.
+2. Upload `01-product-import-valid.xlsx`.
+3. Confirm Preview reports 3 valid rows and 0 invalid rows.
+4. Warnings for Pattern/Wash, Sleeves, and Waist are expected because those
+   legacy client columns are accepted but ignored.
+5. Confirm generated identifiers match:
+
+| Product | Product Code | SKU |
+|---|---|---|
+| UATTEE26 / UATBLACK | UATTEE26_UATBLACK | UATTEE26_UATBLACK_S-XL |
+| UATTEE26 / UATNAVY | UATTEE26_UATNAVY | UATTEE26_UATNAVY_M-2XL |
+| UATJEAN26 / UATBLUE | UATJEAN26_UATBLUE | UATJEAN26_UATBLUE_30-36 |
+
+6. Apply only after the preview is fully valid.
+7. Verify the two Products, three ProductColours, and three SKUs are visible.
+8. Verify MRP is per piece and size members/piece count are derived correctly.
+9. Verify no Product, ProductColour, or catalog master exposes a slug.
+
+## 5. Invalid Product import
+
+Upload `03-product-import-invalid.xlsx` but do not apply it. Verify Preview is
+invalid and Apply remains disabled. It deliberately contains a Product Name
+with spaces, a missing Product Code, a missing SKU, and zero MRP.
+
+## 6. Valid Inventory import
+
+Run this only after the valid Product import has been applied.
+
+1. Open Admin -> Inventory -> Import.
+2. Upload `02-inventory-import-valid.xlsx`.
+3. Confirm all 7 rows are valid in Preview.
+4. Confirm operations appear in workbook order.
+5. Apply the batch once.
+6. Verify final shelf balances:
+
+| SKU | Shelf | Sets |
+|---|---|---:|
+| UATTEE26_UATBLACK_S-XL | A-01 | 7 |
+| UATTEE26_UATBLACK_S-XL | A-02 | 3 |
+| UATTEE26_UATBLACK_S-XL | A-03 | 3 |
+| UATTEE26_UATNAVY_M-2XL | B-01 | 8 |
+| UATJEAN26_UATBLUE_30-36 | C-01 | 4 |
+| UATJEAN26_UATBLUE_30-36 | C-02 | 2 |
+
+Total stock is 13, 8, and 6 Sets respectively. Confirm the ledger records ADD,
+REMOVE, and TRANSFER operations and no balance is negative.
+
+## 7. Invalid Inventory import
+
+Upload `04-inventory-import-invalid.xlsx` but do not apply it. Verify Preview
+is invalid and Apply is disabled. The file deliberately includes an unknown
+SKU, zero quantity, a same-shelf transfer, and an exact duplicate operation.
+
+## 8. Product UI checks
+
+1. Create one Product manually with a single-token uppercase-compatible name.
+2. Confirm Product Code and SKU are generated by the backend, not typed by the
+   Admin.
+3. Add/review colour-level images if storage testing is intended.
+4. Archive the manual Product and confirm Inventory/order-history references
+   are not hard-deleted.
+5. Confirm no form, table, filter, URL, payload, or error asks for a slug.
+
+## 9. Order and pricing checks
+
+Order creation requires the appropriate Wholesaler/Retailer client or approved
+API test flow. When available, verify:
+
+1. Wholesaler order starts at `PENDING_ADMIN`.
+2. Retailer order starts at `PENDING_WHOLESALER`.
+3. Pending orders do not change Inventory.
+4. Quantity changes/removal work; adding a new item during approval does not.
+5. Admin confirmation deducts stock atomically from the smallest shelves first.
+6. MRP is per piece, discount applies before 5% GST, and historical snapshots
+   do not change after later catalog/account edits.
+
+## 10. Pass criteria
+
+- No active UI/API/model/import/catalog slug dependency is observed.
+- Valid workbooks preview and apply exactly once.
+- Invalid workbooks cannot be applied.
+- Product Code/SKU values match the expected uppercase identifiers.
+- Inventory final balances and ledger match this guide.
+- Product and Inventory behavior shows no regression.
