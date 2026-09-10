@@ -90,13 +90,13 @@ test(
       const firstCategory = await request('/categories', {
         method: 'POST',
         token: adminToken,
-        body: { name: '  Shirts  ' },
+        body: { name: '  Shirts  ', sizeFamily: 'ALPHA' },
       });
       assert.equal(firstCategory.status, 201);
       const secondCategory = await request('/categories', {
         method: 'POST',
         token: adminToken,
-        body: { name: 'Denim' },
+        body: { name: 'Denim', sizeFamily: 'NUMERIC' },
       });
       assert.equal(secondCategory.status, 201);
 
@@ -110,7 +110,7 @@ test(
       });
       assert.equal(subCategory.status, 201);
       assert.equal(subCategory.body.data.name, 'Plain Solid');
-      assert.equal(subCategory.body.data.slug, 'plain-solid');
+      assert.equal(Object.hasOwn(subCategory.body.data, 'slug'), false);
       assert.equal(subCategory.body.data.category._id, firstCategory.body.data._id);
       assert.ok(subCategory.body.data.createdAt);
       assert.ok(subCategory.body.data.updatedAt);
@@ -153,8 +153,8 @@ test(
           body: { name: `  ${name}  ` },
         });
         assert.equal(created.status, 201);
-        assert.equal(created.body.data.name, name);
-        assert.equal(created.body.data.slug, name.toLowerCase().replace(/ /g, '-'));
+        assert.equal(created.body.data.name, path === '/colours' ? name.toUpperCase() : name);
+        assert.equal(Object.hasOwn(created.body.data, 'slug'), false);
 
         const readableByWholesaler = await request(path, { token: wholesalerToken });
         assert.equal(readableByWholesaler.status, 200);
@@ -185,42 +185,43 @@ test(
       const clientPieceCount = await request('/size-sets', {
         method: 'POST',
         token: adminToken,
-        body: { label: 'Invalid', sizes: ['S'], pieceCount: 99 },
+        body: { label: 'S-XL', pieceCount: 99 },
       });
       assert.equal(clientPieceCount.status, 400);
 
       const sizeSet = await request('/size-sets', {
         method: 'POST',
         token: adminToken,
-        body: { label: '  S - XXL  ', sizes: [' S ', 'M', ' XXL '] },
+        body: { label: 's-xl' },
       });
       assert.equal(sizeSet.status, 201);
-      assert.equal(sizeSet.body.data.label, 'S - XXL');
-      assert.deepEqual(sizeSet.body.data.sizes, ['S', 'M', 'XXL']);
-      assert.equal(sizeSet.body.data.pieceCount, 3);
+      assert.equal(sizeSet.body.data.label, 'S-XL');
+      assert.deepEqual(sizeSet.body.data.sizes, ['S', 'M', 'L', 'XL']);
+      assert.equal(sizeSet.body.data.pieceCount, 4);
 
-      const duplicateSizes = await request('/size-sets', {
+      const invalidLabel = await request('/size-sets', {
         method: 'POST',
         token: adminToken,
-        body: { label: 'Duplicate', sizes: ['M', ' m '] },
+        body: { label: 'S-UNKNOWN' },
       });
-      assert.equal(duplicateSizes.status, 400);
+      assert.equal(invalidLabel.status, 400);
 
-      const emptySizes = await request('/size-sets', {
+      const callerProvidedSizes = await request('/size-sets', {
         method: 'POST',
         token: adminToken,
-        body: { label: 'Empty', sizes: [] },
+        body: { label: '30-34', sizes: ['30', '32', '34'] },
       });
-      assert.equal(emptySizes.status, 400);
+      assert.equal(callerProvidedSizes.status, 400);
 
       const updatedSizeSet = await request(`/size-sets/${sizeSet.body.data._id}`, {
         method: 'PATCH',
         token: adminToken,
-        body: { sizes: ['L', 'XL'] },
+        body: { label: '2XL-4XL' },
       });
       assert.equal(updatedSizeSet.status, 200);
-      assert.deepEqual(updatedSizeSet.body.data.sizes, ['L', 'XL']);
-      assert.equal(updatedSizeSet.body.data.pieceCount, 2);
+      assert.equal(updatedSizeSet.body.data.label, '2XL-4XL');
+      assert.deepEqual(updatedSizeSet.body.data.sizes, ['2XL', '3XL', '4XL']);
+      assert.equal(updatedSizeSet.body.data.pieceCount, 3);
 
       const modelDerived = await SizeSet.create({
         label: 'Model Derived',

@@ -42,7 +42,7 @@ const productVariantSchema = new mongoose.Schema(
       immutable: true,
       set: normalizeSku,
       maxlength: 255,
-      match: /^[a-z0-9]+(?:[a-z0-9_-]*[a-z0-9])?$/,
+      match: /^[A-Z0-9]+(?:[A-Z0-9_-]*[A-Z0-9])?$/,
     },
     status: {
       type: String,

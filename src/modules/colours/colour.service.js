@@ -6,4 +6,5 @@ module.exports = makeSimpleMasterService({
   singular: 'colour',
   plural: 'colours',
   indexPrefix: 'colour',
+  normalizeName: (value) => value.trim().replace(/\s+/g, ' ').toUpperCase(),
 });

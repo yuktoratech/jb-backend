@@ -15,7 +15,7 @@ Do not implement business logic until you have reported conflicts.
 ## Catalog prompt
 
 Implement Product, Colour, Size Set and immutable SKU management
-according to the docs. The backend generates every new lowercase SKU and
+according to the docs. The backend generates every new uppercase SKU and
 rejects caller attempts to choose it. Include colour-level images, MRP per
 piece, dynamic masters, validation, indexes and tests.
 

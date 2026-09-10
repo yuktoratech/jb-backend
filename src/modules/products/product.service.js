@@ -11,6 +11,7 @@ const SizeSet = require('../sizeSets/sizeSet.model');
 const SubCategory = require('../subcategories/subCategory.model');
 const ProductVariant = require('../variants/productVariant.model');
 const { groupVariants } = require('../variants/variant.service');
+const { allocateProductCode, resolveOrCreateSizeSet } = require('./catalogGeneration.service');
 const Product = require('./product.model');
 const ApiError = require('../../utils/ApiError');
 const {
@@ -29,8 +30,8 @@ const migrationProductFields = [
   'waist',
 ];
 
-const productCategoryFields = '_id name slug status';
-const masterFields = '_id name slug status';
+const productCategoryFields = '_id name status';
+const masterFields = '_id name status';
 
 const escapeRegex = (value) =>
   value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -243,7 +244,7 @@ const buildProductDocument = (payload) =>
 const getProductById = async (productId) => {
   const product = await Product.findById(productId)
     .populate('category', productCategoryFields)
-    .populate('subCategory', '_id name slug status category')
+    .populate('subCategory', '_id name status category')
     .populate('fitId', masterFields)
     .populate('fabricId', masterFields)
     .lean();
@@ -306,7 +307,7 @@ const listProducts = async ({ page, limit, search, categoryId, subCategoryId, st
   const [products, total] = await Promise.all([
     Product.find(filter)
       .populate('category', productCategoryFields)
-      .populate('subCategory', '_id name slug status category')
+      .populate('subCategory', '_id name status category')
       .populate('fitId', masterFields)
       .populate('fabricId', masterFields)
       .sort({ createdAt: -1, _id: -1 })
@@ -334,24 +335,20 @@ const createProduct = async (payload) => {
     status: 'active',
   }).select('_id').lean();
   const [category, fit, fabric] = await Promise.all([
-    Category.findOne({ _id: payload.categoryId, status: 'active' }).select('_id').lean(),
+    Category.findOne({ _id: payload.categoryId, status: 'active' }).select('_id sizeFamily').lean(),
     Fit.findOne({ _id: payload.fitId, status: 'active' }).select('_id').lean(),
     Fabric.findOne({ _id: payload.fabricId, status: 'active' }).select('_id').lean(),
   ]);
   if (!category) throw new ApiError(404, 'Active category not found');
+  if (!category.sizeFamily) throw new ApiError(409, 'Configure a size family for this category.');
   if (!subCategory) throw new ApiError(404, 'Active SubCategory for the Category not found');
   if (!fit) throw new ApiError(404, 'Active Fit not found');
   if (!fabric) throw new ApiError(404, 'Active Fabric not found');
 
   const colourIds = payload.productColours.map(({ colourId }) => colourId);
-  const sizeSetIds = payload.productColours.flatMap(({ skus }) => skus.map(({ sizeSetId }) => sizeSetId));
-  const [colours, sizeSets] = await Promise.all([
-    Colour.find({ _id: { $in: colourIds }, status: 'active' }).select('_id').lean(),
-    SizeSet.find({ _id: { $in: sizeSetIds }, status: 'active' }).select('_id label').lean(),
-  ]);
+  const colours = await Colour.find({ _id: { $in: colourIds }, status: 'active' }).select('_id name').lean();
   if (colours.length !== new Set(colourIds).size) throw new ApiError(404, 'One or more active Colours were not found');
-  if (sizeSets.length !== new Set(sizeSetIds).size) throw new ApiError(404, 'One or more active SizeSets were not found');
-  const sizeSetById = new Map(sizeSets.map((entry) => [entry._id.toString(), entry]));
+  const colourById = new Map(colours.map((entry) => [entry._id.toString(), entry]));
 
   await Promise.all([Product.init(), ProductColour.init(), ProductVariant.init(), Inventory.init()]);
   const session = await mongoose.startSession();
@@ -369,30 +366,31 @@ const createProduct = async (payload) => {
       status: payload.status || 'active',
     }], transactionSession ? { session: transactionSession } : undefined);
     productId = product._id;
-    const colourDocs = payload.productColours.map((entry) => ({
-      _id: new mongoose.Types.ObjectId(),
-      product: product._id,
-      colour: entry.colourId,
-      productCode: normalizeProductCode(entry.productCode),
-      images: [],
-      status: entry.status || 'active',
-    }));
+    const reservedCodes = new Set();
+    const colourDocs = [];
+    for (const entry of payload.productColours) {
+      const colour = colourById.get(entry.colourId);
+      const productCode = await allocateProductCode({ productId: product._id, colourId: colour._id, productName: product.name, colourName: colour.name, session: transactionSession, reserved: reservedCodes });
+      reservedCodes.add(productCode);
+      colourDocs.push({ _id: new mongoose.Types.ObjectId(), product: product._id, colour: entry.colourId, productCode, images: [], status: entry.status || 'active' });
+    }
     await ProductColour.insertMany(colourDocs, transactionSession ? { session: transactionSession, ordered: true } : { ordered: true });
     const skuDocs = [];
-    payload.productColours.forEach((entry, index) => {
-      entry.skus.forEach((skuInput) => {
-        const sizeSet = sizeSetById.get(skuInput.sizeSetId);
+    for (let index = 0; index < payload.productColours.length; index += 1) {
+      const entry = payload.productColours[index];
+      for (const skuInput of entry.skus) {
+        const sizeSet = await resolveOrCreateSizeSet({ input: skuInput.size, sizeFamily: category.sizeFamily, session: transactionSession });
         skuDocs.push({
           _id: new mongoose.Types.ObjectId(),
           catalogVersion: 2,
           product: product._id,
           productColour: colourDocs[index]._id,
           sizeSetRef: sizeSet._id,
-          sku: generateSku(entry.productCode, sizeSet.label),
+          sku: generateSku(colourDocs[index].productCode, sizeSet.label),
           status: skuInput.status || 'active',
         });
-      });
-    });
+      }
+    }
     const variants = await ProductVariant.insertMany(skuDocs, transactionSession ? { session: transactionSession, ordered: true } : { ordered: true });
     const now = new Date();
     await Inventory.insertMany(variants.map((variant) => ({ variant: variant._id, sku: variant.sku, shelves: [], availableQuantity: 0, totalQuantity: 0, status: 'out_of_stock', createdAt: now, updatedAt: now })), transactionSession ? { session: transactionSession, ordered: true } : { ordered: true });

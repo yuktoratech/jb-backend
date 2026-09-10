@@ -1690,11 +1690,11 @@ const getVariantWithProduct = (filter) =>
     .populate({
       path: 'product',
       select: '_id name productName productCode description category subCategory fitId fabricId mrpPerPieceMinor status',
-      populate: { path: 'category', select: '_id name slug status' },
+      populate: { path: 'category', select: '_id name status' },
     })
     .populate({
       path: 'productColour',
-      populate: { path: 'colour', select: '_id name slug status' },
+      populate: { path: 'colour', select: '_id name status' },
     })
     .populate('sizeSetRef', '_id label sizes pieceCount status');
 

@@ -42,15 +42,15 @@ test('finalized Product, ProductColour, and immutable SKU catalog is enforced', 
       assert.equal(result.status, 201, JSON.stringify(result.body));
       return result.body.data;
     };
-    const category = await create('/categories', { name: 'Denim' });
+    const category = await create('/categories', { name: 'Denim', sizeFamily: 'NUMERIC' });
     const subCategory = await create('/subcategories', { categoryId: category._id, name: 'Ankle Fit' });
     const colourWhite = await create('/colours', { name: 'White' });
     const colourBlack = await create('/colours', { name: 'Black' });
     const colourBlue = await create('/colours', { name: 'Blue' });
     const fit = await create('/fits', { name: 'Slim' });
     const fabric = await create('/fabrics', { name: 'Cotton' });
-    const numericSizes = await create('/size-sets', { label: '32 - 40', sizes: ['32', '34', '36', '38', '40'] });
-    const alphaSizes = await create('/size-sets', { label: 'S - XXL', sizes: ['S', 'M', 'L', 'XL', 'XXL'] });
+    const numericSizes = await create('/size-sets', { label: '32-40' });
+    await create('/size-sets', { label: 'S-2XL' });
 
     const callerProvidedSkuCreation = await request('/products', {
       method: 'POST', token,
@@ -63,8 +63,7 @@ test('finalized Product, ProductColour, and immutable SKU catalog is enforced', 
         fabricId: fabric._id,
         mrpPerPieceMinor: 125000,
         productColours: [
-          { colourId: colourWhite._id, productCode: '  Denim   White  ', skus: [{ sizeSetId: numericSizes._id }] },
-          { colourId: colourBlack._id, productCode: 'Snitch Black', skus: [{ sizeSetId: alphaSizes._id, sku: ' Custom SKU 01 ' }] },
+          { colourId: colourWhite._id, skus: [{ size: '32-40' }] },
         ],
       },
     });
@@ -74,7 +73,7 @@ test('finalized Product, ProductColour, and immutable SKU catalog is enforced', 
     const productCreation = await request('/products', {
       method: 'POST', token,
       body: {
-        name: 'Classic Denim',
+        name: 'DENIM',
         description: 'Core wholesale denim.',
         categoryId: category._id,
         subCategoryId: subCategory._id,
@@ -82,22 +81,22 @@ test('finalized Product, ProductColour, and immutable SKU catalog is enforced', 
         fabricId: fabric._id,
         mrpPerPieceMinor: 125000,
         productColours: [
-          { colourId: colourWhite._id, productCode: '  Denim   White  ', skus: [{ sizeSetId: numericSizes._id }] },
-          { colourId: colourBlack._id, productCode: 'Snitch Black', skus: [{ sizeSetId: alphaSizes._id }] },
+          { colourId: colourWhite._id, skus: [{ size: '32-40' }] },
+          { colourId: colourBlack._id, skus: [{ size: '34-40' }] },
         ],
       },
     });
     assert.equal(productCreation.status, 201, JSON.stringify(productCreation.body));
     const data = productCreation.body.data;
-    assert.equal(data.product.name, 'Classic Denim');
+    assert.equal(data.product.name, 'DENIM');
     assert.equal(data.product.mrpPerPieceMinor, 125000);
     assert.equal(data.product.productName, undefined);
     assert.equal(data.product.title, undefined);
     assert.equal(data.productColours.length, 2);
-    const white = data.productColours.find((entry) => entry.productCode === 'denim_white');
-    const black = data.productColours.find((entry) => entry.productCode === 'snitch_black');
-    assert.equal(white.skus[0].sku, 'denim_white_32-40');
-    assert.equal(black.skus[0].sku, 'snitch_black_s-xxl');
+    const white = data.productColours.find((entry) => entry.productCode === 'DENIM_WHITE');
+    const black = data.productColours.find((entry) => entry.productCode === 'DENIM_BLACK');
+    assert.equal(white.skus[0].sku, 'DENIM_WHITE_32-40');
+    assert.equal(black.skus[0].sku, 'DENIM_BLACK_34-40');
     assert.equal(white.skus[0].sizeSetRef.pieceCount, 5);
 
     const inventories = await Inventory.find({ variant: { $in: [white.skus[0]._id, black.skus[0]._id] } }).lean();
@@ -105,19 +104,20 @@ test('finalized Product, ProductColour, and immutable SKU catalog is enforced', 
     assert.ok(inventories.every((entry) => entry.totalQuantity === 0));
     const finalizedInventoryResponse = await request(`/inventory/sku/${white.skus[0].sku}`, { token });
     assert.equal(finalizedInventoryResponse.status, 200);
-    assert.equal(finalizedInventoryResponse.body.data.product.name, 'Classic Denim');
-    assert.equal(finalizedInventoryResponse.body.data.productColour.productCode, 'denim_white');
-    assert.equal(finalizedInventoryResponse.body.data.colour.name, 'White');
-    assert.equal(finalizedInventoryResponse.body.data.sizeSet.label, '32 - 40');
+    assert.equal(finalizedInventoryResponse.body.data.product.name, 'DENIM');
+    assert.equal(finalizedInventoryResponse.body.data.productColour.productCode, 'DENIM_WHITE');
+    assert.equal(finalizedInventoryResponse.body.data.colour.name, 'WHITE');
+    assert.equal(finalizedInventoryResponse.body.data.sizeSet.label, '32-40');
     assert.equal(finalizedInventoryResponse.body.data.reservedQuantity, undefined);
 
-    const duplicateCode = await request('/product-colours', { method: 'POST', token, body: { productId: data.product._id, colourId: colourBlue._id, productCode: 'denim white' } });
-    assert.equal(duplicateCode.status, 409);
+    const blue = await request('/product-colours', { method: 'POST', token, body: { productId: data.product._id, colourId: colourBlue._id } });
+    assert.equal(blue.status, 201);
+    assert.equal(blue.body.data.productCode, 'DENIM_BLUE');
 
-    const duplicateColour = await request('/product-colours', { method: 'POST', token, body: { productId: data.product._id, colourId: colourWhite._id, productCode: 'different code' } });
+    const duplicateColour = await request('/product-colours', { method: 'POST', token, body: { productId: data.product._id, colourId: colourWhite._id } });
     assert.equal(duplicateColour.status, 409);
 
-    const callerProvidedStandaloneSku = await request(`/products/${data.product._id}/variants`, { method: 'POST', token, body: { productColourId: black._id, sizeSetId: numericSizes._id, sku: 'caller_override' } });
+    const callerProvidedStandaloneSku = await request(`/products/${data.product._id}/variants`, { method: 'POST', token, body: { productColourId: black._id, size: '30-36', sku: 'caller_override' } });
     assert.equal(callerProvidedStandaloneSku.status, 400);
 
     const immutableSku = await request(`/variants/${white.skus[0]._id}`, { method: 'PATCH', token, body: { sku: 'renamed' } });
@@ -125,26 +125,27 @@ test('finalized Product, ProductColour, and immutable SKU catalog is enforced', 
     const skuDocument = await ProductVariant.findById(white.skus[0]._id);
     skuDocument.sku = 'renamed';
     await skuDocument.save();
-    assert.equal((await ProductVariant.findById(skuDocument._id).lean()).sku, 'denim_white_32-40');
+    assert.equal((await ProductVariant.findById(skuDocument._id).lean()).sku, 'DENIM_WHITE_32-40');
 
-    const referencedSizeSetEdit = await request(`/size-sets/${numericSizes._id}`, { method: 'PATCH', token, body: { sizes: ['30', '32'] } });
+    const generatedNumericSizeSetId = white.skus[0].sizeSetRef._id;
+    const referencedSizeSetEdit = await request(`/size-sets/${generatedNumericSizeSetId}`, { method: 'PATCH', token, body: { label: '30-32' } });
     assert.equal(referencedSizeSetEdit.status, 409);
-    const referencedSizeSetStatus = await request(`/size-sets/${numericSizes._id}`, { method: 'PATCH', token, body: { status: 'inactive' } });
+    const referencedSizeSetStatus = await request(`/size-sets/${generatedNumericSizeSetId}`, { method: 'PATCH', token, body: { status: 'inactive' } });
     assert.equal(referencedSizeSetStatus.status, 200);
-    const inactiveSizeAssignment = await request(`/products/${data.product._id}/variants`, { method: 'POST', token, body: { productColourId: black._id, sizeSetId: numericSizes._id } });
-    assert.equal(inactiveSizeAssignment.status, 404);
+    const inactiveSizeAssignment = await request(`/products/${data.product._id}/variants`, { method: 'POST', token, body: { productColourId: black._id, size: '32-40' } });
+    assert.equal(inactiveSizeAssignment.status, 409);
 
-    const moveUsedSubCategory = await request(`/subcategories/${subCategory._id}`, { method: 'PATCH', token, body: { categoryId: (await create('/categories', { name: 'Shirts' }))._id } });
+    const moveUsedSubCategory = await request(`/subcategories/${subCategory._id}`, { method: 'PATCH', token, body: { categoryId: (await create('/categories', { name: 'Shirts', sizeFamily: 'ALPHA' }))._id } });
     assert.equal(moveUsedSubCategory.status, 409);
 
     const productCountBefore = await Product.countDocuments();
     const collisionProduct = await request('/products', {
       method: 'POST', token,
-      body: { name: 'Collision', categoryId: category._id, subCategoryId: subCategory._id, fitId: fit._id, fabricId: fabric._id, mrpPerPieceMinor: 10000, productColours: [{ colourId: colourWhite._id, productCode: 'snitch black', skus: [{ sizeSetId: alphaSizes._id }] }] },
+      body: { name: 'DENIM', categoryId: category._id, subCategoryId: subCategory._id, fitId: fit._id, fabricId: fabric._id, mrpPerPieceMinor: 10000, productColours: [{ colourId: colourWhite._id, skus: [{ size: '30-36' }] }] },
     });
-    assert.equal(collisionProduct.status, 409);
-    assert.equal(await Product.countDocuments(), productCountBefore);
-    assert.equal(await ProductColour.countDocuments({ productCode: 'snitch_black' }), 1);
+    assert.equal(collisionProduct.status, 201);
+    assert.equal(await Product.countDocuments(), productCountBefore + 1);
+    assert.equal(collisionProduct.body.data.productColours[0].productCode, 'DENIM_WHITE_2');
   } finally {
     if (server) await close(server);
     if (mongoose.connection.readyState) { await mongoose.connection.dropDatabase(); await mongoose.disconnect(); }

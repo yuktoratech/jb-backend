@@ -92,21 +92,15 @@ const getCategoryActions = async (groups, state) => {
 
     if (!seenNames.has(key)) {
       seenNames.add(key);
-      requestedCategories.push({
-        name: group.product.categoryName,
-        slug: categoryService.createCategorySlug(group.product.categoryName),
-      });
+      requestedCategories.push({ name: group.product.categoryName });
     }
   });
 
   const names = requestedCategories.map(({ name }) => name);
-  const slugs = requestedCategories.map(({ slug }) => slug);
   const existingCategories =
     names.length === 0
       ? []
-      : await Category.find({
-          $or: [{ name: { $in: names } }, { slug: { $in: slugs } }],
-        })
+      : await Category.find({ name: { $in: names } })
           .collation(CATEGORY_COLLATION)
           .lean();
   const byName = new Map(
@@ -115,58 +109,14 @@ const getCategoryActions = async (groups, state) => {
       category,
     ]),
   );
-  const bySlug = new Map(
-    existingCategories.map((category) => [category.slug, category]),
-  );
   const actions = new Map();
 
-  requestedCategories.forEach(({ name, slug }) => {
+  requestedCategories.forEach(({ name }) => {
     const key = normalizeTextForComparison(name);
     const namedCategory = byName.get(key);
-    const slugCategory = bySlug.get(slug);
     const rows = categoryRows(groups, name);
 
-    if (!slug) {
-      addPlanError(
-        state,
-        rows,
-        'INVALID_CATEGORY_SLUG',
-        'category',
-        `A valid slug cannot be generated for category ${name}`,
-      );
-      actions.set(key, { action: 'conflict', name, slug });
-      return;
-    }
-
-    if (
-      namedCategory &&
-      slugCategory &&
-      objectIdString(namedCategory._id) !== objectIdString(slugCategory._id)
-    ) {
-      addPlanError(
-        state,
-        rows,
-        'CATEGORY_IDENTITY_CONFLICT',
-        'category',
-        `Category ${name} and generated slug ${slug} belong to different existing records`,
-      );
-      actions.set(key, { action: 'conflict', name, slug });
-      return;
-    }
-
-    const existing = namedCategory || slugCategory;
-
-    if (existing && !valuesMatch(existing.name, name)) {
-      addPlanError(
-        state,
-        rows,
-        'CATEGORY_SLUG_CONFLICT',
-        'category',
-        `Generated category slug ${slug} is already used by ${existing.name}`,
-      );
-      actions.set(key, { action: 'conflict', name, slug, existing });
-      return;
-    }
+    const existing = namedCategory;
 
     if (existing?.status !== undefined && existing.status !== 'active') {
       addPlanError(
@@ -176,14 +126,13 @@ const getCategoryActions = async (groups, state) => {
         'category',
         `Existing category ${existing.name} is inactive`,
       );
-      actions.set(key, { action: 'conflict', name, slug, existing });
+      actions.set(key, { action: 'conflict', name, existing });
       return;
     }
 
     actions.set(key, {
       action: existing ? 'reuse' : 'create',
       name,
-      slug,
       existing,
     });
   });
@@ -846,7 +795,6 @@ const buildReconciliationPlan = async (parsed) => {
 
 const publicCategoryAction = (action) => ({
   name: action.name,
-  slug: action.slug,
   existingId: action.existing?._id,
 });
 
@@ -1098,7 +1046,6 @@ const applyCatalogPlan = async ({
     if (action.action === 'create') {
       await categoryService.createCategory({
         name: action.name,
-        slug: action.slug,
         status: 'active',
       });
       applied.createdCategories += 1;

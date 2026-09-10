@@ -47,16 +47,16 @@ test('finalized Order state machine and pricing snapshots are enforced', { timeo
     ]);
     const retailer = await User.create({ name: 'Retailer', email: 'order-retailer@example.test', phone: '9000000003', password, role: 'retailer', status: 'active', parentWholesaler: wholesaler._id, discountPercent: 20 });
 
-    const category = await Category.create({ name: 'Order Category', slug: 'order-category', status: 'active' });
-    const subCategory = await SubCategory.create({ category: category._id, name: 'Order Subcategory', slug: 'order-subcategory', status: 'active' });
+    const category = await Category.create({ name: 'Order Category', status: 'active' });
+    const subCategory = await SubCategory.create({ category: category._id, name: 'Order Subcategory', status: 'active' });
     const [fit, fabric, black, blue, sizeSet] = await Promise.all([
-      Fit.create({ name: 'Regular', slug: 'regular', status: 'active' }),
-      Fabric.create({ name: 'Cotton', slug: 'cotton', status: 'active' }),
-      Colour.create({ name: 'Black', slug: 'black', status: 'active' }),
-      Colour.create({ name: 'Blue', slug: 'blue', status: 'active' }),
+      Fit.create({ name: 'Regular', status: 'active' }),
+      Fabric.create({ name: 'Cotton', status: 'active' }),
+      Colour.create({ name: 'Black', status: 'active' }),
+      Colour.create({ name: 'Blue', status: 'active' }),
       SizeSet.create({ label: 'S-XXL', sizes: ['S', 'M', 'L', 'XL', 'XXL'], pieceCount: 5, status: 'active' }),
     ]);
-    const product = await Product.create({ catalogVersion: 2, name: 'Snapshot Shirt', category: category._id, subCategory: subCategory._id, fitId: fit._id, fabricId: fabric._id, mrpPerPieceMinor: 100000, status: 'active' });
+    const product = await Product.create({ catalogVersion: 2, name: 'SNAPSHOT', category: category._id, subCategory: subCategory._id, fitId: fit._id, fabricId: fabric._id, mrpPerPieceMinor: 100000, status: 'active' });
     const [blackPc, bluePc] = await ProductColour.create([
       { product: product._id, colour: black._id, productCode: 'snapshot_black', images: [], status: 'active' },
       { product: product._id, colour: blue._id, productCode: 'snapshot_blue', images: [], status: 'active' },

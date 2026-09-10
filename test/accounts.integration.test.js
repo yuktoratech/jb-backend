@@ -473,6 +473,7 @@ test(
         body: {
           name: 'Accounts Regression Category',
           description: 'Created by account integration regression coverage',
+          sizeFamily: 'NUMERIC',
         },
       });
       assert.equal(categoryCreation.status, 201);
@@ -492,14 +493,14 @@ test(
       });
       const sizeSetCreation = await request('/size-sets', {
         method: 'POST', token: adminToken,
-        body: { label: '30-38', sizes: ['30', '32', '34', '36', '38'] },
+        body: { label: '30-38' },
       });
 
       const productCreation = await request('/products', {
         method: 'POST',
         token: adminToken,
         body: {
-          name: 'Account Test Shirt',
+          name: 'ACCOUNT',
           categoryId: categoryCreation.body.data._id,
           subCategoryId: subCategoryCreation.body.data._id,
           fitId: fitCreation.body.data._id,
@@ -507,8 +508,7 @@ test(
           mrpPerPieceMinor: 10000,
           productColours: [{
             colourId: colourCreation.body.data._id,
-            productCode: 'account test',
-            skus: [{ sizeSetId: sizeSetCreation.body.data._id }],
+            skus: [{ size: '30-38' }],
           }],
         },
       });

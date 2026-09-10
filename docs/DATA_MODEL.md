@@ -9,31 +9,38 @@ cleared by update.
 
 ## Category / SubCategory
 
-Dynamic masters. SubCategory belongs to Category.
+Dynamic masters. SubCategory belongs to Category. Category has an explicit
+`sizeFamily` enum (`ALPHA`, `NUMERIC`); a missing value marks legacy data that
+must be configured before Product workflows may use it. Category and
+SubCategory identity is name-based; neither model exposes or stores a slug.
 
 ## Colour / Fit / Fabric
 
-Dynamic masters.
+Dynamic name-based masters. They do not expose or store slugs.
 
 ## SizeSet
 
-`label`, explicit `sizes[]`, `pieceCount`, `status`. Do not rely on
-parsing the label at runtime.
+Canonical uppercase `label`, explicit uppercase `sizes[]`, `pieceCount`,
+`status`. Product input is parsed once to resolve/create this master; stored
+catalog and order behavior use the explicit members and never parse labels at
+runtime.
 
 ## Product
 
-`name`, `description`, `categoryId`, `subCategoryId`, `fitId`,
+Canonical uppercase single-token `name`, `description`, `categoryId`, `subCategoryId`, `fitId`,
 `fabricId`, `mrpPerPieceMinor`, `status`.
 
 ## ProductColour
 
-`productId`, `colourId`, `productCode`, `images[]`, `status`.
+`productId`, `colourId`, canonical uppercase backend-generated `productCode`,
+`images[]`, `status`.
 
 ## SKU
 
 `productId`, `productColourId`, `sizeSetId`, `sku`, `status`. Every new SKU
-is backend-generated, unique, lowercase and immutable; caller input is never
-authoritative. Existing persisted immutable SKUs are grandfathered.
+is backend-generated, canonical uppercase, unique and immutable; caller input
+is never authoritative during manual creation. Client XLSX values are accepted
+only when they match the backend-derived logical identifier after normalization.
 
 ## ShelfInventory
 

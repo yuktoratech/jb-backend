@@ -6,6 +6,7 @@ const Product = require('../products/product.model');
 const SizeSet = require('../sizeSets/sizeSet.model');
 const ProductVariant = require('./productVariant.model');
 const { generateSku, normalizeSku, normalizeSkuPart } = require('../../utils/sku');
+const { resolveOrCreateSizeSet } = require('../products/catalogGeneration.service');
 
 const transactionUnsupported = (error) =>
   error?.code === 20 ||
@@ -42,7 +43,7 @@ const listProductVariants = async (productId, { status }) => {
   const filter = { product: productId };
   if (status) filter.status = status;
   const variants = await ProductVariant.find(filter)
-    .populate({ path: 'productColour', populate: { path: 'colour', select: '_id name slug status' } })
+    .populate({ path: 'productColour', populate: { path: 'colour', select: '_id name status' } })
     .populate('sizeSetRef', '_id label sizes pieceCount status')
     .sort({ createdAt: 1, _id: 1 })
     .lean();
@@ -50,19 +51,19 @@ const listProductVariants = async (productId, { status }) => {
 };
 
 const createVariant = async (productId, payload) => {
-  const [product, productColour, sizeSet] = await Promise.all([
-    Product.findOne({ _id: productId, catalogVersion: 2, status: 'active' }).select('_id').lean(),
+  const [product, productColour] = await Promise.all([
+    Product.findOne({ _id: productId, catalogVersion: 2, status: 'active' }).populate('category', '_id sizeFamily').select('_id category').lean(),
     ProductColour.findOne({ _id: payload.productColourId, product: productId, status: 'active' }).select('_id product productCode').lean(),
-    SizeSet.findOne({ _id: payload.sizeSetId, status: 'active' }).select('_id label').lean(),
   ]);
   if (!product) throw new ApiError(404, 'Active finalized Product not found');
   if (!productColour) throw new ApiError(404, 'Active ProductColour for the Product not found');
-  if (!sizeSet) throw new ApiError(404, 'Active SizeSet not found');
-  const sku = generateSku(productColour.productCode, sizeSet.label);
+  if (!product.category?.sizeFamily) throw new ApiError(409, 'Configure a size family for this category.');
   await Promise.all([ProductVariant.init(), Inventory.init()]);
   const session = await mongoose.startSession();
   let variant;
   const write = async (transactionSession) => {
+    const sizeSet = await resolveOrCreateSizeSet({ input: payload.size, sizeFamily: product.category.sizeFamily, session: transactionSession });
+    const sku = generateSku(productColour.productCode, sizeSet.label);
     [variant] = await ProductVariant.create([{
       catalogVersion: 2,
       product: productId,

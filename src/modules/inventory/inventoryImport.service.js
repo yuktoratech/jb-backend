@@ -11,6 +11,7 @@ const ImportBatch = require('./importBatch.model');
 const { normalizeShelf } = require('./inventory.utils');
 
 const HEADERS = ['SKU', 'TYPE', 'QUANTITY', 'SHELF', 'TO SHELF'];
+const HEADER_ALIASES = new Map([['ADJUSTMENT TYPE', 'TYPE'], ['QTY', 'QUANTITY']]);
 const TYPES = ['ADD', 'REMOVE', 'TRANSFER'];
 const blank = (v) => v === undefined || v === null || String(v).trim() === '';
 const header = (v) => blank(v) ? '' : String(v).trim().replace(/\s+/g, ' ').toUpperCase();
@@ -28,8 +29,8 @@ const parseWorkbook = async (buffer) => {
   if (totalRows > 10000) return { totalRows, rows: [], errors: [issue(1, 'FILE', 'TOO_MANY_ROWS', 'The worksheet cannot contain more than 10000 rows')] };
   const map = new Map(); const errors = [];
   sheet[0].forEach((value, index) => {
-    const key = header(value); if (!key) return;
-    if (!HEADERS.includes(key)) errors.push(issue(1, key, 'UNEXPECTED_COLUMN', `Unexpected column: ${key}`));
+    const rawKey = header(value); const key = HEADER_ALIASES.get(rawKey) || rawKey; if (!key) return;
+    if (!HEADERS.includes(key)) errors.push(issue(1, key, 'UNEXPECTED_COLUMN', `Unexpected column: ${rawKey}`));
     else if (map.has(key)) errors.push(issue(1, key, 'DUPLICATE_COLUMN', `Duplicate column: ${key}`));
     else map.set(key, index);
   });
@@ -59,7 +60,7 @@ const parseWorkbook = async (buffer) => {
   });
   operations.forEach((duplicates) => {
     if (duplicates.length < 2) return;
-    duplicates.forEach((row) => errors.push(issue(row.rowNumber, 'ROW', 'DUPLICATE_OPERATION', 'This exact inventory operation appears more than once', row.sku)));
+    duplicates.forEach((row) => errors.push(issue(row.rowNumber, 'ROW', 'DUPLICATE_OPERATION', 'This exact inventory adjustment is duplicated.', row.sku)));
   });
   return { totalRows, rows, errors };
 };

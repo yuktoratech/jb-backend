@@ -6,7 +6,7 @@ const BATCH_TTL_DAYS = 7;
 const FIELDS = {
   productName: { label: 'Product Name', aliases: ['PRODUCT NAME'], required: true },
   category: { label: 'Category', aliases: ['CATEGORY'], required: true },
-  subCategory: { label: 'Sub-category', aliases: ['SUB-CATEGORY', 'SUBCATEGORY', 'SUB CATEGORY'], required: true },
+  subCategory: { label: 'Sub-category', aliases: ['SUB-CATEGORY', 'SUBCATEGORY', 'SUB CATEGORY'] },
   fit: { label: 'Fit', aliases: ['FIT'], required: true },
   fabric: { label: 'Fabric', aliases: ['FABRIC'], required: true },
   description: { label: 'Description', aliases: ['DESCRIPTION', 'PRODUCT TITLE'] },
@@ -15,7 +15,7 @@ const FIELDS = {
   productCode: { label: 'Product Code', aliases: ['PRODUCT CODE'], required: true },
   sizeSet: { label: 'Size Set', aliases: ['SIZE SET', 'SIZE'], required: true },
   status: { label: 'Status', aliases: ['STATUS'] },
-  legacySku: { label: 'SKU', aliases: ['SKU'] },
+  suppliedSku: { label: 'SKU', aliases: ['SKU'], required: true },
   patternWash: { label: 'Pattern/Wash', aliases: ['PATTERN/WASH', 'PATTERN / WASH', 'PATTERN', 'WASH'] },
   sleeves: { label: 'Sleeves', aliases: ['SLEEVES', 'SLEEVE'] },
   waist: { label: 'Waist', aliases: ['WAIST'] },

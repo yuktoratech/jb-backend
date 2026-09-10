@@ -1,7 +1,7 @@
 const crypto = require('node:crypto');
 const readXlsxFile = require('read-excel-file/node').default;
 const ApiError = require('../../utils/ApiError');
-const { normalizeProductCode } = require('../../utils/sku');
+const { normalizeProductCode, normalizeProductName, normalizeSku, normalizeUpperText } = require('../../utils/sku');
 const { FIELDS, MAX_ISSUES, MAX_ROWS } = require('./productImport.constants');
 
 const normalizeHeader = (value) => String(value ?? '').trim().replace(/\s+/g, ' ').toUpperCase();
@@ -48,7 +48,7 @@ const parseWorkbook = async (buffer) => {
   const add = (collection, issue) => { if (collection.length < MAX_ISSUES) collection.push(issue); };
   duplicateHeaders.forEach(({ field, label }) => add(errors, { rowNumber: 1, field, code: 'DUPLICATE_HEADER', message: `${label} appears more than once` }));
   ignoredHeaders.forEach((label) => add(warnings, { rowNumber: 1, field: 'header', code: 'IGNORED_HEADER', message: `Unsupported column ${label} was ignored` }));
-  ['legacySku', 'patternWash', 'sleeves', 'waist', 'images', 'initialStock', 'shelf'].forEach((field) => {
+  ['patternWash', 'sleeves', 'waist', 'images', 'initialStock', 'shelf'].forEach((field) => {
     if (indexes.has(field)) add(warnings, { rowNumber: 1, field, code: 'IGNORED_LEGACY_COLUMN', message: `${FIELDS[field].label} is ignored by finalized Product import` });
   });
 
@@ -57,23 +57,33 @@ const parseWorkbook = async (buffer) => {
     const get = (field) => indexes.has(field) ? normalizeText(cells[indexes.get(field)]) : undefined;
     const row = {
       rowNumber,
-      productName: get('productName'), categoryName: get('category'), subCategoryName: get('subCategory'),
+      productNameInput: get('productName'), categoryName: get('category'), subCategoryName: get('subCategory'),
       fitName: get('fit'), fabricName: get('fabric'), description: get('description') || '', colourName: get('colour'),
       productCodeInput: get('productCode'), sizeSetLabel: get('sizeSet'), status: String(get('status') || 'active').toLowerCase(),
-      legacySku: get('legacySku'),
+      suppliedSkuInput: get('suppliedSku'),
     };
     for (const field of Object.keys(FIELDS).filter((key) => FIELDS[key].required)) {
-      const rowKey = { category: 'categoryName', subCategory: 'subCategoryName', fit: 'fitName', fabric: 'fabricName', colour: 'colourName', productCode: 'productCodeInput', sizeSet: 'sizeSetLabel', mrpPerPiece: 'mrpPerPieceInput' }[field] || field;
+      const rowKey = { productName: 'productNameInput', category: 'categoryName', subCategory: 'subCategoryName', fit: 'fitName', fabric: 'fabricName', colour: 'colourName', productCode: 'productCodeInput', sizeSet: 'sizeSetLabel', suppliedSku: 'suppliedSkuInput', mrpPerPiece: 'mrpPerPieceInput' }[field] || field;
       const value = field === 'mrpPerPiece' ? get(field) : row[rowKey];
       if (value === undefined || value === null || value === '') add(errors, { rowNumber, field, code: field === 'subCategory' ? 'SUBCATEGORY_REQUIRED' : 'MISSING_REQUIRED_FIELD', message: `${FIELDS[field].label} is required` });
     }
     const rawMrp = get('mrpPerPiece');
     row.mrpPerPieceMinor = parseMoney(rawMrp);
-    if (rawMrp !== undefined && rawMrp !== null && rawMrp !== '' && row.mrpPerPieceMinor === null) add(errors, { rowNumber, field: 'mrpPerPiece', code: 'INVALID_MRP', message: 'MRP Per Piece must be a non-negative rupee amount with at most two decimal places' });
+    if (rawMrp !== undefined && rawMrp !== null && rawMrp !== '' && (!row.mrpPerPieceMinor || row.mrpPerPieceMinor < 1)) add(errors, { rowNumber, field: 'mrpPerPiece', code: 'INVALID_MRP', message: 'MRP must be greater than zero.' });
     if (!['active', 'inactive'].includes(row.status)) add(errors, { rowNumber, field: 'status', code: 'INVALID_STATUS', message: 'Status must be active or inactive' });
+    if (row.productNameInput) {
+      try { row.productName = normalizeProductName(String(row.productNameInput)); }
+      catch (error) { add(errors, { rowNumber, field: 'productName', code: 'INVALID_PRODUCT_NAME', message: error.message }); }
+    }
+    if (row.colourName) row.colourName = normalizeUpperText(String(row.colourName), 'Colour');
+    if (row.sizeSetLabel) row.sizeSetLabel = normalizeUpperText(String(row.sizeSetLabel), 'Size');
     if (row.productCodeInput) {
       try { row.productCode = normalizeProductCode(row.productCodeInput); }
       catch (error) { add(errors, { rowNumber, field: 'productCode', code: 'INVALID_PRODUCT_CODE', message: error.message }); }
+    }
+    if (row.suppliedSkuInput) {
+      try { row.suppliedSku = normalizeSku(String(row.suppliedSkuInput)); }
+      catch (error) { add(errors, { rowNumber, field: 'sku', code: 'INVALID_SKU', message: error.message }); }
     }
     return row;
   });

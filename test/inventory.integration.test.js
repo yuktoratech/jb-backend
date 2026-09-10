@@ -187,7 +187,6 @@ test('inventory APIs keep shelf stock and transaction history consistent', {
       }),
       Category.create({
         name: 'Inventory Test Category',
-        slug: 'inventory-test-category',
         status: 'active',
       }),
     ]);
@@ -211,7 +210,7 @@ test('inventory APIs keep shelf stock and transaction history consistent', {
     const variant = productResult.variants[0].sizeSets[0];
     const variantId = variant.variantId.toString();
 
-    assert.equal(variant.sku, 'abc_black_30-38');
+    assert.equal(variant.sku, 'ABC_BLACK_30-38');
 
     const zeroInventory = await Inventory.findOne({ variant: variantId }).lean();
     assert.ok(zeroInventory, 'product creation should initialize inventory');

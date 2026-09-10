@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { normalizeProductName } = require('../../utils/sku');
 
 const isNonNegativeSafeInteger = (value) =>
   value === undefined || (Number.isSafeInteger(value) && value >= 0);
@@ -10,6 +11,7 @@ const productSchema = new mongoose.Schema(
       type: String,
       trim: true,
       maxlength: 150,
+      set: normalizeProductName,
       required() { return this.catalogVersion === 2; },
     },
     description: { type: String, trim: true, maxlength: 5000 },

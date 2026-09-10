@@ -5,16 +5,6 @@ const CATEGORY_NAME_COLLATION = { locale: 'en', strength: 2 };
 
 const normalizeName = (name) => name.trim().replace(/\s+/g, ' ');
 
-const createSlug = (value) =>
-  value
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .trim()
-    .replace(/[’']/g, '')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-
 const escapeRegex = (value) =>
   value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -27,10 +17,10 @@ const duplicateCategoryError = (error) => {
     return new ApiError(409, 'A category with this name already exists');
   }
 
-  return new ApiError(409, 'A category with this slug already exists');
+  return new ApiError(409, 'A category with this name already exists');
 };
 
-const ensureUniqueCategory = async ({ name, slug, excludeId }) => {
+const ensureUniqueCategory = async ({ name, excludeId }) => {
   const exclusion = excludeId ? { _id: { $ne: excludeId } } : {};
 
   const categoryWithName = await Category.findOne({
@@ -45,16 +35,6 @@ const ensureUniqueCategory = async ({ name, slug, excludeId }) => {
     throw new ApiError(409, 'A category with this name already exists');
   }
 
-  const categoryWithSlug = await Category.findOne({
-    ...exclusion,
-    slug,
-  })
-    .select('_id')
-    .lean();
-
-  if (categoryWithSlug) {
-    throw new ApiError(409, 'A category with this slug already exists');
-  }
 };
 
 const listCategories = async ({ page, limit, search, status }) => {
@@ -101,19 +81,12 @@ const getCategoryById = async (categoryId) => {
 
 const createCategory = async (payload) => {
   const name = normalizeName(payload.name);
-  const slug = payload.slug || createSlug(name);
-
-  if (!slug) {
-    throw new ApiError(400, 'A valid category slug could not be generated');
-  }
-
-  await ensureUniqueCategory({ name, slug });
+  await ensureUniqueCategory({ name });
 
   try {
     return await Category.create({
       ...payload,
       name,
-      slug,
     });
   } catch (error) {
     const duplicateError = duplicateCategoryError(error);
@@ -134,16 +107,9 @@ const updateCategory = async (categoryId, payload) => {
   }
 
   const name = payload.name ? normalizeName(payload.name) : category.name;
-  const slug =
-    payload.slug || (payload.name ? createSlug(name) : category.slug);
+  await ensureUniqueCategory({ name, excludeId: categoryId });
 
-  if (!slug) {
-    throw new ApiError(400, 'A valid category slug could not be generated');
-  }
-
-  await ensureUniqueCategory({ name, slug, excludeId: categoryId });
-
-  Object.assign(category, payload, { name, slug });
+  Object.assign(category, payload, { name });
 
   try {
     return await category.save();
@@ -174,7 +140,6 @@ const deactivateCategory = async (categoryId) => {
 };
 
 module.exports = {
-  createCategorySlug: createSlug,
   createCategory,
   deactivateCategory,
   getCategoryById,

@@ -13,17 +13,6 @@ const nameSchema = z
   .min(1, 'Category name is required')
   .max(100, 'Category name cannot exceed 100 characters');
 
-const slugSchema = z
-  .string({ error: 'Category slug must be a string' })
-  .trim()
-  .min(1, 'Category slug cannot be empty')
-  .max(120, 'Category slug cannot exceed 120 characters')
-  .regex(
-    /^[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*$/,
-    'Category slug may contain only letters, numbers, and single hyphens',
-  )
-  .transform((slug) => slug.toLowerCase());
-
 const descriptionSchema = z
   .string({ error: 'Description must be a string' })
   .trim()
@@ -32,6 +21,7 @@ const descriptionSchema = z
 const statusSchema = z.enum(CATEGORY_STATUSES, {
   error: 'Status must be active or inactive',
 });
+const sizeFamilySchema = z.enum(['ALPHA', 'NUMERIC'], { error: 'Size family must be ALPHA or NUMERIC' });
 
 const categoryIdParamsSchema = z
   .object({
@@ -42,8 +32,8 @@ const categoryIdParamsSchema = z
 const createCategoryBodySchema = z
   .object({
     name: nameSchema,
-    slug: slugSchema.optional(),
     description: descriptionSchema.optional(),
+    sizeFamily: sizeFamilySchema,
     status: statusSchema.optional(),
   })
   .strict();
@@ -51,8 +41,8 @@ const createCategoryBodySchema = z
 const updateCategoryBodySchema = z
   .object({
     name: nameSchema.optional(),
-    slug: slugSchema.optional(),
     description: descriptionSchema.optional(),
+    sizeFamily: sizeFamilySchema.optional(),
     status: statusSchema.optional(),
   })
   .strict()

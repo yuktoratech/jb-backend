@@ -6,6 +6,7 @@ const Colour = require('../colours/colour.model');
 const Product = require('../products/product.model');
 const ProductColour = require('./productColour.model');
 const { presentProductColour } = require('./productColourImage.presenter');
+const { allocateProductCode } = require('../products/catalogGeneration.service');
 
 const mapError = (error) => {
   if (error instanceof ApiError) return error;
@@ -17,7 +18,7 @@ const mapError = (error) => {
   return error;
 };
 
-const populate = (query) => query.populate('product', '_id name status').populate('colour', '_id name slug status');
+const populate = (query) => query.populate('product', '_id name status').populate('colour', '_id name status');
 
 const listProductColours = async ({ page, limit, productId, colourId, status }) => {
   const filter = {};
@@ -40,13 +41,14 @@ const getProductColourById = async (id) => {
 
 const createProductColour = async (payload) => {
   const [product, colour] = await Promise.all([
-    Product.findOne({ _id: payload.productId, catalogVersion: 2, status: 'active' }).select('_id').lean(),
-    Colour.findOne({ _id: payload.colourId, status: 'active' }).select('_id').lean(),
+    Product.findOne({ _id: payload.productId, catalogVersion: 2, status: 'active' }).select('_id name').lean(),
+    Colour.findOne({ _id: payload.colourId, status: 'active' }).select('_id name').lean(),
   ]);
   if (!product) throw new ApiError(404, 'Active finalized Product not found');
   if (!colour) throw new ApiError(404, 'Active Colour not found');
   try {
-    const record = await ProductColour.create({ product: payload.productId, colour: payload.colourId, productCode: payload.productCode, images: [], status: payload.status || 'active' });
+    const productCode = await allocateProductCode({ productId: product._id, colourId: colour._id, productName: product.name, colourName: colour.name });
+    const record = await ProductColour.create({ product: payload.productId, colour: payload.colourId, productCode, images: [], status: payload.status || 'active' });
     return getProductColourById(record._id);
   } catch (error) { throw mapError(error); }
 };

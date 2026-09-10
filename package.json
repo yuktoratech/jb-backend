@@ -11,6 +11,8 @@
     "migration:catalog:validate": "node scripts/validateCatalogMigration.js",
     "migration:catalog:import": "node scripts/importCatalogMigration.js",
     "migration:reconcile": "node scripts/reconcileLegacyData.js",
+    "migration:uppercase": "node scripts/migrateUppercaseCatalog.js",
+    "migration:remove-slugs": "node scripts/removeCatalogSlugs.js",
     "test:accounts": "node --test test/accounts.integration.test.js",
     "test:catalog-migration": "node --test test/catalogMigration.integration.test.js",
     "test:data-reconciliation": "node --test test/dataReconciliation.integration.test.js",

@@ -57,13 +57,13 @@ test('FCM device ownership and finalized Order notification recipients', { timeo
       { name: 'Retailer', email: 'push-retailer@example.test', phone: '9876543212', password, role: 'retailer', status: 'active', parentWholesaler: wholesaler._id, discountPercent: 12 },
       { name: 'Other Retailer', email: 'push-other-retailer@example.test', phone: '9876543213', password, role: 'retailer', status: 'active', parentWholesaler: otherWholesaler._id },
     ]);
-    const category = await Category.create({ name: 'Push Category', slug: 'push-category' });
-    const sub = await SubCategory.create({ category: category._id, name: 'Push Sub', slug: 'push-sub' });
+    const category = await Category.create({ name: 'Push Category' });
+    const sub = await SubCategory.create({ category: category._id, name: 'Push Sub' });
     const [fit, fabric, colour, sizeSet] = await Promise.all([
-      Fit.create({ name: 'Push Fit', slug: 'push-fit' }), Fabric.create({ name: 'Push Fabric', slug: 'push-fabric' }),
-      Colour.create({ name: 'Push Black', slug: 'push-black' }), SizeSet.create({ label: 'Push S-L', sizes: ['S', 'M', 'L'] }),
+      Fit.create({ name: 'Push Fit' }), Fabric.create({ name: 'Push Fabric' }),
+      Colour.create({ name: 'Push Black' }), SizeSet.create({ label: 'Push S-L', sizes: ['S', 'M', 'L'] }),
     ]);
-    const product = await Product.create({ catalogVersion: 2, name: 'Push Product', category: category._id, subCategory: sub._id, fitId: fit._id, fabricId: fabric._id, mrpPerPieceMinor: 10000 });
+    const product = await Product.create({ catalogVersion: 2, name: 'PUSH', category: category._id, subCategory: sub._id, fitId: fit._id, fabricId: fabric._id, mrpPerPieceMinor: 10000 });
     const productColour = await ProductColour.create({ product: product._id, colour: colour._id, productCode: 'push_black' });
     const sku = await Variant.create({ catalogVersion: 2, product: product._id, productColour: productColour._id, sizeSetRef: sizeSet._id, sku: 'push_black_pushs-l' });
     await Inventory.create({ variant: sku._id, sku: sku.sku, shelves: [{ shelf: 'A', quantity: 100 }] });

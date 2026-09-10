@@ -43,6 +43,19 @@ duplicate operation is rejected as `DUPLICATE_OPERATION`. Any invalid row
 blocks the batch, and Apply commits the batch, balances and ledger atomically.
 There are no manual stock-adjustment forms in the Admin frontend.
 
+The client headers are `SKU`, `QTY`, `SHELF`, `ADJUSTMENT TYPE`, `TO SHELF`;
+legacy `QUANTITY` and `TYPE` headings remain accepted aliases. SKU matching is
+canonical uppercase.
+
+## Product import and archive
+
+The exact approved client Product workbook is accepted. Product identifiers
+are backend-derived and compared to supplied Product Code/SKU after canonical
+uppercase normalization. Active catalog records are safely upserted, including
+new Colours, new Size Sets/SKUs and Product-level MRP changes. All changes apply
+atomically. Historical order pricing remains snapshotted. Delete means soft
+archive for both Product and ProductColour and preserves all references.
+
 ## Shelf deduction
 
 Goal: leave the minimum practical number of partially occupied shelves.

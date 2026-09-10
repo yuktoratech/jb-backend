@@ -28,11 +28,11 @@ test('legacy data reconciliation is safe and idempotent', { timeout: 90000, skip
       assert.throws(() => rupeesToMinor('1.005'));
     });
 
-    const category = await Category.create({ name: 'Jeans', slug: 'jeans', status: 'active' });
-    const subCategory = await SubCategory.create({ name: 'Denim', slug: 'denim', category: category._id, status: 'active' });
+    const category = await Category.create({ name: 'Jeans', status: 'active' });
+    const subCategory = await SubCategory.create({ name: 'Denim', category: category._id, status: 'active' });
     await Promise.all([
-      Fit.create({ name: 'Regular', slug: 'regular', status: 'active' }),
-      Fabric.create({ name: 'Cotton', slug: 'cotton', status: 'active' }),
+      Fit.create({ name: 'Regular', status: 'active' }),
+      Fabric.create({ name: 'Cotton', status: 'active' }),
       SizeSet.create({ label: '32-36', sizes: ['32', '34', '36'], status: 'active' }),
     ]);
 
@@ -97,10 +97,10 @@ test('legacy data reconciliation is safe and idempotent', { timeout: 90000, skip
     assert.deepEqual(product.images, ['legacy/image.jpg']);
     assert.equal(variant._id.toString(), variantId.toString());
     assert.equal(variant.catalogVersion, 2);
-    assert.equal(variant.sku, 'denim_black_32-36');
+    assert.equal(variant.sku, 'DENIM_BLACK_32-36');
     assert.equal(variant.productColour.toString(), productColour._id.toString());
     assert.equal(inventory.variant.toString(), variantId.toString());
-    assert.equal(inventory.sku, 'denim_black_32-36');
+    assert.equal(inventory.sku, 'DENIM_BLACK_32-36');
     assert.equal(inventory.shelves[0].quantity, 9);
     assert.equal(inventory.reservedQuantity, undefined);
     assert.equal(inventory.reservedShelves, undefined);
@@ -129,6 +129,7 @@ test('legacy data reconciliation is safe and idempotent', { timeout: 90000, skip
 
     await t.test('ambiguous ProductColour and invalid inventory are reported', async () => {
       await ProductVariant.collection.deleteMany({ catalogVersion: { $ne: 2 } });
+      await Inventory.collection.deleteOne({ variant: variantId });
       const anotherProduct = new mongoose.Types.ObjectId();
       await Product.collection.insertOne({ _id: anotherProduct, productName: 'Ambiguous', productCode: 'same_code', category: category._id, subCategory: subCategory._id, fit: 'Regular', fabric: 'Cotton', mrp: 100 });
       await ProductVariant.collection.insertMany([

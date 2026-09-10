@@ -39,13 +39,13 @@ test('Saved Addresses are owner-scoped and Orders retain immutable snapshots', {
       { name: 'Other Wholesaler', email: 'address-other@example.test', phone: '9000000003', password, role: 'wholesaler', status: 'active', discountPercent: 5 },
     ]);
     const retailer = await User.create({ name: 'Retailer', email: 'address-retailer@example.test', phone: '9000000004', password, role: 'retailer', status: 'active', parentWholesaler: wholesaler._id, discountPercent: 12 });
-    const category = await Category.create({ name: 'Address Category', slug: 'address-category' });
-    const sub = await SubCategory.create({ category: category._id, name: 'Address Sub', slug: 'address-sub' });
+    const category = await Category.create({ name: 'Address Category' });
+    const sub = await SubCategory.create({ category: category._id, name: 'Address Sub' });
     const [fit, fabric, colour, set] = await Promise.all([
-      Fit.create({ name: 'Address Fit', slug: 'address-fit' }), Fabric.create({ name: 'Address Fabric', slug: 'address-fabric' }),
-      Colour.create({ name: 'Address Black', slug: 'address-black' }), SizeSet.create({ label: 'Address S-L', sizes: ['S', 'M', 'L'] }),
+      Fit.create({ name: 'Address Fit' }), Fabric.create({ name: 'Address Fabric' }),
+      Colour.create({ name: 'Address Black' }), SizeSet.create({ label: 'Address S-L', sizes: ['S', 'M', 'L'] }),
     ]);
-    const product = await Product.create({ catalogVersion: 2, name: 'Address Product', category: category._id, subCategory: sub._id, fitId: fit._id, fabricId: fabric._id, mrpPerPieceMinor: 10000 });
+    const product = await Product.create({ catalogVersion: 2, name: 'ADDRESS', category: category._id, subCategory: sub._id, fitId: fit._id, fabricId: fabric._id, mrpPerPieceMinor: 10000 });
     const pc = await ProductColour.create({ product: product._id, colour: colour._id, productCode: 'address_black' });
     const sku = await Variant.create({ catalogVersion: 2, product: product._id, productColour: pc._id, sizeSetRef: set._id, sku: 'address_black_addresss-l' });
 

@@ -47,13 +47,13 @@ test('ProductColour image objects use provider-neutral storage safely', { timeou
       { name: 'Image Admin', email: 'image-admin@example.test', phone: '9000000001', password, role: 'admin', status: 'active' },
       { name: 'Image Wholesale', email: 'image-wholesale@example.test', phone: '9876543210', password, role: 'wholesaler', status: 'active' },
     ]);
-    const category = await Category.create({ name: 'Image Category', slug: 'image-category' });
-    const sub = await SubCategory.create({ category: category._id, name: 'Image Sub', slug: 'image-sub' });
+    const category = await Category.create({ name: 'Image Category' });
+    const sub = await SubCategory.create({ category: category._id, name: 'Image Sub' });
     const [fit, fabric, black, blue] = await Promise.all([
-      Fit.create({ name: 'Image Fit', slug: 'image-fit' }), Fabric.create({ name: 'Image Fabric', slug: 'image-fabric' }),
-      Colour.create({ name: 'Image Black', slug: 'image-black' }), Colour.create({ name: 'Image Blue', slug: 'image-blue' }),
+      Fit.create({ name: 'Image Fit' }), Fabric.create({ name: 'Image Fabric' }),
+      Colour.create({ name: 'Image Black' }), Colour.create({ name: 'Image Blue' }),
     ]);
-    const product = await Product.create({ catalogVersion: 2, name: 'Image Product', category: category._id, subCategory: sub._id, fitId: fit._id, fabricId: fabric._id, mrpPerPieceMinor: 10000 });
+    const product = await Product.create({ catalogVersion: 2, name: 'IMAGE', category: category._id, subCategory: sub._id, fitId: fit._id, fabricId: fabric._id, mrpPerPieceMinor: 10000 });
     const [colourA, colourB] = await ProductColour.create([
       { product: product._id, colour: black._id, productCode: 'image_black' },
       { product: product._id, colour: blue._id, productCode: 'image_blue' },

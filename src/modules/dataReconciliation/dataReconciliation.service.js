@@ -11,7 +11,6 @@ const SubCategory = require('../subcategories/subCategory.model');
 const User = require('../users/user.model');
 const ProductVariant = require('../variants/productVariant.model');
 const { normalizeProductCode, normalizeSku } = require('../../utils/sku');
-const { createSlug } = require('../catalogMasters/master.utils');
 
 const REPORT_VERSION = 1;
 const LEGACY_RESERVATION_TYPES = ['ORDER_RESERVE', 'ORDER_RELEASE'];
@@ -148,7 +147,7 @@ const buildPlan = async () => {
       return null;
     }
     if (!plannedColourByName.has(key)) {
-      const created = { _id: new mongoose.Types.ObjectId(), name: String(name).trim(), slug: createSlug(name), status: 'active' };
+      const created = { _id: new mongoose.Types.ObjectId(), name: String(name).trim(), status: 'active' };
       plannedColourByName.set(key, created); plan.colourCreates.push(created);
     }
     return plannedColourByName.get(key);

@@ -43,16 +43,16 @@ test('Admin final confirmation is one atomic stock transaction', { timeout: 1200
       { name: 'Wholesaler', email: 'confirm-wholesaler@example.test', phone: '9000000002', password, role: 'wholesaler', status: 'active', discountPercent: 10 },
     ]);
     const retailer = await User.create({ name: 'Retailer', email: 'confirm-retailer@example.test', phone: '9000000003', password, role: 'retailer', status: 'active', parentWholesaler: wholesaler._id, discountPercent: 12 });
-    const category = await Category.create({ name: 'Confirmation Category', slug: 'confirmation-category', status: 'active' });
-    const subCategory = await SubCategory.create({ category: category._id, name: 'Confirmation Subcategory', slug: 'confirmation-subcategory', status: 'active' });
+    const category = await Category.create({ name: 'Confirmation Category', status: 'active' });
+    const subCategory = await SubCategory.create({ category: category._id, name: 'Confirmation Subcategory', status: 'active' });
     const [fit, fabric, black, blue, sizeSet] = await Promise.all([
-      Fit.create({ name: 'Confirm Fit', slug: 'confirm-fit', status: 'active' }),
-      Fabric.create({ name: 'Confirm Fabric', slug: 'confirm-fabric', status: 'active' }),
-      Colour.create({ name: 'Confirm Black', slug: 'confirm-black', status: 'active' }),
-      Colour.create({ name: 'Confirm Blue', slug: 'confirm-blue', status: 'active' }),
+      Fit.create({ name: 'Confirm Fit', status: 'active' }),
+      Fabric.create({ name: 'Confirm Fabric', status: 'active' }),
+      Colour.create({ name: 'Confirm Black', status: 'active' }),
+      Colour.create({ name: 'Confirm Blue', status: 'active' }),
       SizeSet.create({ label: 'Confirm S-XL', sizes: ['S', 'M', 'L', 'XL'], pieceCount: 4, status: 'active' }),
     ]);
-    const product = await Product.create({ catalogVersion: 2, name: 'Confirmation Product', category: category._id, subCategory: subCategory._id, fitId: fit._id, fabricId: fabric._id, mrpPerPieceMinor: 10000, status: 'active' });
+    const product = await Product.create({ catalogVersion: 2, name: 'CONFIRMATION', category: category._id, subCategory: subCategory._id, fitId: fit._id, fabricId: fabric._id, mrpPerPieceMinor: 10000, status: 'active' });
     const [blackPc, bluePc] = await ProductColour.create([
       { product: product._id, colour: black._id, productCode: 'confirm_black', images: [], status: 'active' },
       { product: product._id, colour: blue._id, productCode: 'confirm_blue', images: [], status: 'active' },

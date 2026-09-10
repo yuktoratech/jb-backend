@@ -3,19 +3,12 @@ const { z } = require('zod');
 const objectId = (label) =>
   z.string({ error: `${label} is required` }).trim().regex(/^[a-f\d]{24}$/i, `A valid ${label.toLowerCase()} is required`);
 const name = z.string({ error: 'SubCategory name is required' }).trim().min(1).max(100);
-const slug = z
-  .string()
-  .trim()
-  .min(1)
-  .max(120)
-  .regex(/^[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*$/, 'SubCategory slug may contain only letters, numbers, and single hyphens')
-  .transform((value) => value.toLowerCase());
 const status = z.enum(['active', 'inactive'], { error: 'Status must be active or inactive' });
 const params = z.object({ id: objectId('SubCategory ID') }).strict();
 
 module.exports = {
   createSubCategorySchema: {
-    body: z.object({ categoryId: objectId('Category ID'), name, slug: slug.optional(), status: status.optional() }).strict(),
+    body: z.object({ categoryId: objectId('Category ID'), name, status: status.optional() }).strict(),
   },
   listSubCategoriesSchema: {
     query: z
@@ -32,7 +25,7 @@ module.exports = {
   updateSubCategorySchema: {
     params,
     body: z
-      .object({ categoryId: objectId('Category ID').optional(), name: name.optional(), slug: slug.optional(), status: status.optional() })
+      .object({ categoryId: objectId('Category ID').optional(), name: name.optional(), status: status.optional() })
       .strict()
       .refine((body) => Object.keys(body).length > 0, { message: 'At least one field is required' }),
   },

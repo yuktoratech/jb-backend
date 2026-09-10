@@ -3,7 +3,6 @@ const ApiError = require('../../utils/ApiError');
 const SubCategory = require('./subCategory.model');
 const {
   MASTER_NAME_COLLATION,
-  createSlug,
   escapeRegex,
   normalizeName,
   validationApiError,
@@ -19,18 +18,16 @@ const duplicateError = (error) => {
   if (error.keyPattern?.name || error.message?.includes('unique_subcategory_name_per_category')) {
     return new ApiError(409, 'A SubCategory with this name already exists in the category');
   }
-  return new ApiError(409, 'A SubCategory with this slug already exists in the category');
+  return new ApiError(409, 'A SubCategory with this name already exists in the category');
 };
 
-const ensureUnique = async ({ category, name, slug, excludeId }) => {
+const ensureUnique = async ({ category, name, excludeId }) => {
   const exclusion = excludeId ? { _id: { $ne: excludeId } } : {};
   const sameName = await SubCategory.findOne({ ...exclusion, category, name })
     .collation(MASTER_NAME_COLLATION)
     .select('_id')
     .lean();
   if (sameName) throw new ApiError(409, 'A SubCategory with this name already exists in the category');
-  const sameSlug = await SubCategory.findOne({ ...exclusion, category, slug }).select('_id').lean();
-  if (sameSlug) throw new ApiError(409, 'A SubCategory with this slug already exists in the category');
 };
 
 const mapError = (error) => duplicateError(error) || validationApiError(error) || error;
@@ -43,7 +40,7 @@ const listSubCategories = async ({ page, limit, search, status, categoryId }) =>
   const skip = (page - 1) * limit;
   const [subCategories, total] = await Promise.all([
     SubCategory.find(filter)
-      .populate('category', '_id name slug status')
+      .populate('category', '_id name status')
       .sort({ createdAt: -1, _id: -1 })
       .skip(skip)
       .limit(limit)
@@ -54,7 +51,7 @@ const listSubCategories = async ({ page, limit, search, status, categoryId }) =>
 };
 
 const getSubCategoryById = async (id) => {
-  const record = await SubCategory.findById(id).populate('category', '_id name slug status').lean();
+  const record = await SubCategory.findById(id).populate('category', '_id name status').lean();
   if (!record) throw new ApiError(404, 'SubCategory not found');
   return record;
 };
@@ -62,14 +59,11 @@ const getSubCategoryById = async (id) => {
 const createSubCategory = async (payload) => {
   await ensureActiveCategory(payload.categoryId);
   const name = normalizeName(payload.name);
-  const slug = payload.slug || createSlug(name);
-  if (!slug) throw new ApiError(400, 'A valid SubCategory slug could not be generated');
-  await ensureUnique({ category: payload.categoryId, name, slug });
+  await ensureUnique({ category: payload.categoryId, name });
   try {
     const record = await SubCategory.create({
       category: payload.categoryId,
       name,
-      slug,
       status: payload.status,
     });
     return getSubCategoryById(record._id);
@@ -90,12 +84,9 @@ const updateSubCategory = async (id, payload) => {
   const category = payload.categoryId || record.category;
   if (payload.categoryId) await ensureActiveCategory(payload.categoryId);
   const name = payload.name ? normalizeName(payload.name) : record.name;
-  const slug = payload.slug || (payload.name ? createSlug(name) : record.slug);
-  if (!slug) throw new ApiError(400, 'A valid SubCategory slug could not be generated');
-  await ensureUnique({ category, name, slug, excludeId: id });
+  await ensureUnique({ category, name, excludeId: id });
   record.category = category;
   record.name = name;
-  record.slug = slug;
   if (payload.status) record.status = payload.status;
   try {
     await record.save();

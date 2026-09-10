@@ -1,5 +1,6 @@
 const ApiError = require('../../utils/ApiError');
 const SizeSet = require('./sizeSet.model');
+const { canonicalizeSizeSet, inferSizeFamily, sameCanonicalSizes } = require('./sizeSetCanonical');
 const { MASTER_NAME_COLLATION, escapeRegex, validationApiError } = require('../catalogMasters/master.utils');
 
 const duplicateError = (error) =>
@@ -32,9 +33,10 @@ const getSizeSetById = async (id) => {
 };
 
 const createSizeSet = async (payload) => {
-  await ensureUniqueLabel(payload.label);
+  const canonical = canonicalizeSizeSet(payload.label, inferSizeFamily(payload.label));
+  await ensureUniqueLabel(canonical.label);
   try {
-    return await SizeSet.create({ ...payload, pieceCount: payload.sizes.length });
+    return await SizeSet.create({ ...canonical, status: payload.status });
   } catch (error) {
     throw mapError(error);
   }
@@ -43,16 +45,27 @@ const createSizeSet = async (payload) => {
 const updateSizeSet = async (id, payload) => {
   const record = await SizeSet.findById(id);
   if (!record) throw new ApiError(404, 'SizeSet not found');
-  if (payload.label !== undefined || payload.sizes !== undefined) {
+  let canonical;
+  if (payload.label !== undefined) {
+    canonical = canonicalizeSizeSet(payload.label, inferSizeFamily(payload.label));
+  }
+  const identityChanges = canonical && (
+    canonical.label !== record.label || !sameCanonicalSizes(canonical.sizes, record.sizes)
+  );
+  if (identityChanges) {
     const ProductVariant = require('../variants/productVariant.model');
     const isReferenced = await ProductVariant.exists({ sizeSetRef: record._id });
     if (isReferenced) {
       throw new ApiError(409, 'Referenced SizeSet label and sizes are immutable; only status may change');
     }
   }
-  const nextLabel = payload.label || record.label;
+  const nextLabel = canonical?.label || record.label;
   await ensureUniqueLabel(nextLabel, id);
-  Object.assign(record, payload);
+  if (canonical) {
+    record.label = canonical.label;
+    record.sizes = canonical.sizes;
+  }
+  if (payload.status) record.status = payload.status;
   try {
     return await record.save();
   } catch (error) {

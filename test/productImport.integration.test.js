@@ -25,10 +25,10 @@ const User = require('../src/modules/users/user.model');
 const { generateAccessToken } = require('../src/utils/jwt');
 const xlsx = require('./xlsxTestHelper');
 
-const HEADERS = ['Product Name', 'Category', 'Sub-category', 'Fit', 'Fabric', 'Description', 'MRP Per Piece', 'Colour', 'Product Code', 'Size Set', 'Status', 'SKU', 'Pattern/Wash', 'Sleeves', 'Waist', 'Images', 'Initial Stock', 'Shelf'];
+const HEADERS = ['Product Name', 'Product Code', 'SKU', 'Category', 'Product title', 'Colour', 'Size', 'MRP', 'Fit', 'Pattern/Wash', 'Fabric', 'Sleeves', 'Waist'];
 const row = (overrides = {}) => {
-  const values = { productName: 'Core Denim', category: 'Jeans', subCategory: 'Straight', fit: 'Regular', fabric: 'Cotton', description: 'Core range', mrp: '1299.50', colour: 'Black', productCode: 'CORE Black', sizeSet: '32 - 36', status: 'active', sku: 'WRONG_UPPERCASE_SKU', pattern: 'Ignored', sleeves: 'Ignored', waist: 'Ignored', images: 'https://invalid.test/image.jpg', stock: 50, shelf: 'A1', ...overrides };
-  return [values.productName, values.category, values.subCategory, values.fit, values.fabric, values.description, values.mrp, values.colour, values.productCode, values.sizeSet, values.status, values.sku, values.pattern, values.sleeves, values.waist, values.images, values.stock, values.shelf];
+  const values = { productName: 'CORE', category: 'Jeans', fit: 'Regular', fabric: 'Cotton', description: 'Core range', mrp: '1299.50', colour: 'BLACK', productCode: 'CORE_BLACK', sizeSet: '32-36', sku: 'CORE_BLACK_32-36', pattern: 'Ignored', sleeves: 'Ignored', waist: 'Ignored', ...overrides };
+  return [values.productName, values.productCode, values.sku, values.category, values.description, values.colour, values.sizeSet, values.mrp, values.fit, values.pattern, values.fabric, values.sleeves, values.waist];
 };
 const workbook = (...rows) => xlsx([HEADERS, ...rows]);
 
@@ -41,16 +41,16 @@ test('finalized Product XLSX preview/apply is validated, persisted, and atomic',
     await mongoose.connection.dropDatabase();
     const admin = await User.create({ name: 'Import Admin', email: 'product-import@example.test', phone: '9000000001', password: 'Product-Import-1!', role: 'admin', status: 'active' });
     const otherAdmin = await User.create({ name: 'Other Admin', email: 'other-product-import@example.test', phone: '9000000002', password: 'Product-Import-2!', role: 'admin', status: 'active' });
-    const category = await Category.create({ name: 'Jeans', slug: 'jeans', status: 'active' });
-    const otherCategory = await Category.create({ name: 'Shirts', slug: 'shirts', status: 'active' });
+    const category = await Category.create({ name: 'Jeans', sizeFamily: 'NUMERIC', status: 'active' });
+    const otherCategory = await Category.create({ name: 'Shirts', sizeFamily: 'ALPHA', status: 'active' });
     await Promise.all([
-      SubCategory.create({ category: category._id, name: 'Straight', slug: 'straight', status: 'active' }),
-      SubCategory.create({ category: otherCategory._id, name: 'Formal', slug: 'formal', status: 'active' }),
-      Colour.create({ name: 'Black', slug: 'black', status: 'active' }),
-      Colour.create({ name: 'Blue', slug: 'blue', status: 'active' }),
-      Colour.create({ name: 'Dormant', slug: 'dormant', status: 'inactive' }),
-      Fit.create({ name: 'Regular', slug: 'regular', status: 'active' }),
-      Fabric.create({ name: 'Cotton', slug: 'cotton', status: 'active' }),
+      SubCategory.create({ category: category._id, name: 'Straight', status: 'active' }),
+      SubCategory.create({ category: otherCategory._id, name: 'Formal', status: 'active' }),
+      Colour.create({ name: 'Black', status: 'active' }),
+      Colour.create({ name: 'Blue', status: 'active' }),
+      Colour.create({ name: 'Dormant', status: 'inactive' }),
+      Fit.create({ name: 'Regular', status: 'active' }),
+      Fabric.create({ name: 'Cotton', status: 'active' }),
       SizeSet.create({ label: '32 - 36', sizes: ['32', '34', '36'], status: 'active' }),
       SizeSet.create({ label: 'S - XL', sizes: ['S', 'M', 'L', 'XL'], status: 'active' }),
     ]);
@@ -76,35 +76,36 @@ test('finalized Product XLSX preview/apply is validated, persisted, and atomic',
       assert.equal(preview.body.data.validRows, 1);
       const normalized = preview.body.data.normalizedRows[0];
       assert.equal(normalized.mrpPerPieceMinor, 129950);
-      assert.equal(normalized.expectedSku, 'core_black_32-36');
-      assert.equal(normalized.legacySku, 'WRONG_UPPERCASE_SKU');
+      assert.equal(normalized.expectedSku, 'CORE_BLACK_32-36');
+      assert.equal(normalized.suppliedSku, 'CORE_BLACK_32-36');
       assert.ok(preview.body.data.warnings.some(({ code }) => code === 'IGNORED_LEGACY_COLUMN'));
       assert.equal(normalized.images, undefined);
       assert.equal(normalized.initialStock, undefined);
     });
 
     await t.test('headers, required data, masters, relationship, money, duplicates, and codes are rejected', async () => {
-      const missingHeader = await upload([row()], HEADERS.filter((header) => header !== 'Sub-category'));
+      const missingHeader = await upload([row()], HEADERS.filter((header) => header !== 'SKU'));
       assert.equal(missingHeader.body.data.status, 'INVALID');
-      assert.ok(missingHeader.body.data.errors.some(({ code }) => code === 'SUBCATEGORY_REQUIRED'));
+      assert.ok(missingHeader.body.data.errors.some(({ code }) => code === 'MISSING_REQUIRED_FIELD'));
       const unknown = await upload([row({ category: 'Unknown' })]);
       assert.ok(unknown.body.data.errors.some(({ code }) => code === 'MASTER_NOT_FOUND'));
       const inactive = await upload([row({ colour: 'Dormant' })]);
       assert.ok(inactive.body.data.errors.some(({ code }) => code === 'MASTER_INACTIVE'));
-      const mismatch = await upload([row({ subCategory: 'Formal' })]);
-      assert.ok(mismatch.body.data.errors.some(({ code }) => code === 'SUBCATEGORY_CATEGORY_MISMATCH'));
+      const ambiguousSubcategory = await SubCategory.create({ category: category._id, name: 'Other', status: 'active' });
+      const mismatch = await upload([row()]);
+      assert.ok(mismatch.body.data.errors.some(({ code }) => code === 'SUBCATEGORY_REQUIRED'));
+      await ambiguousSubcategory.deleteOne();
       const badMoney = await upload([row({ mrp: '12.345' })]);
       assert.ok(badMoney.body.data.errors.some(({ code }) => code === 'INVALID_MRP'));
       const duplicate = await upload([row(), row()]);
-      assert.ok(duplicate.body.data.errors.some(({ code }) => code === 'DUPLICATE_ROW'));
       assert.ok(duplicate.body.data.errors.some(({ code }) => code === 'DUPLICATE_PRODUCT_COLOUR_SIZE_SET'));
-      const codeConflict = await upload([row(), row({ colour: 'Blue', sizeSet: 'S - XL' })]);
-      assert.ok(codeConflict.body.data.errors.some(({ code }) => code === 'PRODUCT_CODE_CONFLICT'));
+      const badCode = await upload([row({ productCode: 'WRONG_CODE' })]);
+      assert.ok(badCode.body.data.errors.some(({ code }) => code === 'PRODUCT_CODE_MISMATCH'));
     });
 
     await t.test('valid apply is atomic, idempotent, owner-bound, and creates no inventory/images', async () => {
       if (!transactionCapable) return t.skip('A transaction-capable MongoDB deployment is required');
-      const preview = await upload([row(), row({ colour: 'Blue', productCode: 'Core Blue', sizeSet: 'S - XL', sku: 'ignored' })]);
+      const preview = await upload([row(), row({ colour: 'BLUE', productCode: 'CORE_BLUE', sizeSet: '34-38', sku: 'CORE_BLUE_34-38' })]);
       const wrongOwner = await apply(preview.body.data.id, generateAccessToken(otherAdmin));
       assert.equal(wrongOwner.status, 404);
       const result = await apply(preview.body.data.id);
@@ -115,7 +116,7 @@ test('finalized Product XLSX preview/apply is validated, persisted, and atomic',
       assert.equal(await ProductVariant.countDocuments(), 2);
       assert.equal(await Inventory.countDocuments(), 0);
       assert.ok((await ProductColour.find({}).lean()).every(({ images }) => images.length === 0));
-      assert.deepEqual((await ProductVariant.find({}).sort({ sku: 1 }).distinct('sku')), ['core_black_32-36', 'core_blue_s-xl']);
+      assert.deepEqual((await ProductVariant.find({}).sort({ sku: 1 }).distinct('sku')), ['CORE_BLACK_32-36', 'CORE_BLUE_34-38']);
       const product = await Product.findOne({ catalogVersion: 2 }).lean();
       assert.equal(product.productName, undefined); assert.equal(product.title, undefined); assert.equal(product.patternWash, undefined);
       const repeated = await apply(preview.body.data.id);
@@ -124,13 +125,13 @@ test('finalized Product XLSX preview/apply is validated, persisted, and atomic',
 
     await t.test('catalog changes after preview make the batch stale and return 409', async () => {
       if (!transactionCapable) return t.skip('A transaction-capable MongoDB deployment is required');
-      const preview = await upload([row({ productName: 'Stale Product', productCode: 'Stale Black' })]);
+      const preview = await upload([row({ productName: 'STALE', productCode: 'STALE_BLACK', sku: 'STALE_BLACK_32-36' })]);
       assert.equal(preview.body.data.status, 'VALID');
       await Fit.updateOne({ name: 'Regular' }, { $set: { status: 'inactive' } });
       const stale = await apply(preview.body.data.id);
       assert.equal(stale.status, 409);
       assert.equal((await ProductImportBatch.findById(preview.body.data.id).lean()).status, 'VALID');
-      assert.equal(await Product.countDocuments({ name: 'Stale Product' }), 0);
+      assert.equal(await Product.countDocuments({ name: 'STALE' }), 0);
       await Fit.updateOne({ name: 'Regular' }, { $set: { status: 'active' } });
     });
 
@@ -138,21 +139,23 @@ test('finalized Product XLSX preview/apply is validated, persisted, and atomic',
       if (!transactionCapable) return t.skip('A transaction-capable MongoDB deployment is required');
       const invalid = await upload([row({ category: 'Missing' })]);
       assert.equal((await apply(invalid.body.data.id)).status, 409);
-      const identical = await upload([row(), row({ colour: 'Blue', productCode: 'Core Blue', sizeSet: 'S - XL' })]);
+      const identical = await upload([row(), row({ colour: 'BLUE', productCode: 'CORE_BLUE', sizeSet: '34-38', sku: 'CORE_BLUE_34-38' })]);
       assert.equal(identical.body.data.status, 'VALID', JSON.stringify(identical.body.data.errors));
       const reused = await apply(identical.body.data.id);
       assert.equal(reused.body.data.existingProducts, 1);
       assert.equal(reused.body.data.existingVariants, 2);
-      const conflict = await upload([row({ mrp: '999.00' })]);
-      assert.ok(conflict.body.data.errors.some(({ code }) => code === 'EXISTING_CATALOG_CONFLICT'));
+      const priceUpdate = await upload([row({ mrp: '999.00' })]);
+      assert.equal(priceUpdate.body.data.status, 'VALID');
+      await apply(priceUpdate.body.data.id);
+      assert.equal((await Product.findOne({ name: 'CORE' }).lean()).mrpPerPieceMinor, 99900);
     });
 
     await t.test('an injected failure rolls back all catalog and batch writes', async () => {
       if (!transactionCapable) return t.skip('A transaction-capable MongoDB deployment is required');
-      const buffer = workbook(row({ productName: 'Rollback Product', productCode: 'Rollback Black' }));
+      const buffer = workbook(row({ productName: 'ROLLBACK', productCode: 'ROLLBACK_BLACK', sku: 'ROLLBACK_BLACK_32-36' }));
       const preview = await productImportService.previewImport(buffer, { uploadedBy: admin._id, originalFilename: 'rollback.xlsx' });
       await assert.rejects(productImportService.applyImport(preview.id, { performedBy: admin._id, afterCatalogWrites: () => { throw new Error('injected apply failure'); } }), /injected apply failure/);
-      assert.equal(await Product.countDocuments({ name: 'Rollback Product' }), 0);
+      assert.equal(await Product.countDocuments({ name: 'ROLLBACK' }), 0);
       assert.equal((await ProductImportBatch.findById(preview.id).lean()).status, 'VALID');
     });
   } finally {

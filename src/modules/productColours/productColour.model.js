@@ -33,7 +33,7 @@ const productColourSchema = new mongoose.Schema(
       immutable: true,
       set: normalizeProductCode,
       maxlength: 100,
-      match: /^[a-z0-9]+(?:_[a-z0-9]+)*$/,
+      match: /^[A-Z0-9]+(?:_[A-Z0-9]+)*$/,
     },
     images: {
       type: [imageSchema],

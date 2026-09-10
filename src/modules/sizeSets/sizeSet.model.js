@@ -1,13 +1,14 @@
 const mongoose = require('mongoose');
+const { normalizeUpperText } = require('../../utils/sku');
 
 const normalizeMember = (value) =>
   typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : value;
 
 const sizeSetSchema = new mongoose.Schema(
   {
-    label: { type: String, required: true, trim: true, maxlength: 100 },
+    label: { type: String, required: true, trim: true, maxlength: 100, set: (value) => normalizeUpperText(value, 'SizeSet label') },
     sizes: {
-      type: [{ type: String, trim: true, maxlength: 50, set: normalizeMember }],
+      type: [{ type: String, trim: true, maxlength: 50, set: (value) => normalizeUpperText(normalizeMember(value), 'Size') }],
       required: true,
       validate: [
         { validator: (sizes) => sizes.length > 0, message: 'SizeSet must contain at least one size' },
