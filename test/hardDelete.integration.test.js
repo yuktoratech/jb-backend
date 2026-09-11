@@ -85,7 +85,9 @@ test('Admin permanent deletes are dependency-safe and preserve soft status actio
 
     const stocked = await makeProduct('STOCKED');
     await Inventory.create({ variant: stocked.variant._id, sku: stocked.variant.sku, shelves: [{ shelf: 'A1', quantity: 1 }] });
-    assert.equal((await request(`/products/${stocked.product._id}/permanent`, adminToken)).status, 409);
+    const stockedDelete = await request(`/products/${stocked.product._id}/permanent`, adminToken);
+    assert.equal(stockedDelete.status, 409);
+    assert.match(stockedDelete.body.message, /inventory stock is available/i);
     assert.ok(await Product.exists({ _id: stocked.product._id }));
     assert.equal((await request(`/products/${stocked.product._id}`, adminToken)).status, 200);
     assert.equal((await request(`/products/${stocked.product._id}`, adminToken, 'PATCH', { status: 'active' })).status, 200);

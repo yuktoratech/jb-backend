@@ -662,7 +662,10 @@ const permanentlyDeleteProduct = async (productId) => {
     return [hasStockDependency, hasLedgerDependency, hasOrderDependency, hasProductImportDependency, hasInventoryImportDependency];
   };
   const [hasStock, hasLedger, hasOrders, hasProductImport, hasInventoryImport] = await dependencies();
-  if (hasStock || hasLedger || hasOrders || hasProductImport || hasInventoryImport || product.images?.length) {
+  if (hasStock) {
+    throw new ApiError(409, 'Cannot permanently delete this product while inventory stock is available. Reduce every SKU shelf balance to 0 first.');
+  }
+  if (hasLedger || hasOrders || hasProductImport || hasInventoryImport || product.images?.length) {
     throw new ApiError(409, 'Cannot permanently delete this product because it is used in existing inventory or order history.');
   }
 
@@ -687,7 +690,11 @@ const permanentlyDeleteProduct = async (productId) => {
       if (!sameRecordSet(currentVariants, variantIds) || !sameRecordSet(currentProductColours, productColourIds)) {
         throw new ApiError(409, 'Product changed while permanent deletion was in progress');
       }
-      if ((await dependencies(session)).some(Boolean)) {
+      const [currentHasStock, ...currentHistoryDependencies] = await dependencies(session);
+      if (currentHasStock) {
+        throw new ApiError(409, 'Cannot permanently delete this product while inventory stock is available. Reduce every SKU shelf balance to 0 first.');
+      }
+      if (currentHistoryDependencies.some(Boolean)) {
         throw new ApiError(409, 'Cannot permanently delete this product because it is used in existing inventory or order history.');
       }
       if (variantIds.length) await Inventory.deleteMany({ variant: { $in: variantIds } }, { session });

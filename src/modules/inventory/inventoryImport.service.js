@@ -6,6 +6,7 @@ const { generateSku, normalizeSizeSetToken, normalizeSku } = require('../../util
 const ProductColour = require('../productColours/productColour.model');
 const ProductVariant = require('../variants/productVariant.model');
 const SizeSet = require('../sizeSets/sizeSet.model');
+const { canonicalizeSizeSet, sameCanonicalSizes } = require('../sizeSets/sizeSetCanonical');
 const Inventory = require('./inventory.model');
 const ImportBatch = require('./importBatch.model');
 const { normalizeShelf } = require('./inventory.utils');
@@ -75,17 +76,29 @@ const resolvedFields = (row, variant) => ({ ...row, resolution: 'EXISTING_SKU', 
   sizeSetLabel: variant.sizeSetRef.label, sizes: variant.sizeSetRef.sizes, pieceCount: variant.sizeSetRef.pieceCount });
 
 const resolveMissing = async (row) => {
-  const all = await ProductColour.find({ status: 'active' }).populate('product', '_id name status catalogVersion').populate('colour', '_id name status');
+  const all = await ProductColour.find({ status: 'active' })
+    .populate({ path: 'product', select: '_id name status catalogVersion category', populate: { path: 'category', select: '_id sizeFamily status' } })
+    .populate('colour', '_id name status');
   const matches = all.filter((pc) => pc.product?.status === 'active' && pc.colour?.status === 'active' && row.sku.startsWith(`${pc.productCode}_`));
   if (matches.length !== 1) throw new ApiError(422, matches.length ? 'ProductColour resolution is ambiguous' : 'ProductColour could not be resolved');
   const pc = matches[0]; const token = row.sku.slice(pc.productCode.length + 1);
-  const sets = (await SizeSet.find({ status: 'active' })).filter((set) => { try { return normalizeSizeSetToken(set.label) === token; } catch (_) { return false; } });
-  if (sets.length !== 1) throw new ApiError(422, sets.length ? 'SizeSet resolution is ambiguous' : 'SizeSet could not be resolved from approved master data');
+  const sizeFamily = pc.product?.category?.sizeFamily;
+  if (!sizeFamily) throw new ApiError(422, 'The Product Category does not have a configured size family');
+  let canonical;
+  try { canonical = canonicalizeSizeSet(token, sizeFamily); }
+  catch (error) { throw new ApiError(422, `SizeSet is invalid for this ${sizeFamily.toLowerCase()} Category: ${error.message}`); }
+  const labelledSets = await SizeSet.find({ label: canonical.label }).collation({ locale: 'en', strength: 2 });
+  if (labelledSets.some((set) => !sameCanonicalSizes(set.sizes, canonical.sizes))) throw new ApiError(422, `SizeSet ${canonical.label} conflicts with approved master data`);
+  const sets = labelledSets.filter((set) => sameCanonicalSizes(set.sizes, canonical.sizes));
+  if (sets.length > 1) throw new ApiError(422, 'SizeSet resolution is ambiguous');
   const set = sets[0];
-  if (generateSku(pc.productCode, set.label) !== row.sku) throw new ApiError(422, 'SKU does not match resolved masters');
-  if (await ProductVariant.exists({ productColour: pc._id, sizeSetRef: set._id })) throw new ApiError(409, 'This ProductColour and SizeSet already have a different SKU');
-  return { ...row, resolution: 'CREATE_SKU', productId: pc.product._id, productColourId: pc._id, sizeSetId: set._id,
-    productName: pc.product.name, productCode: pc.productCode, colourName: pc.colour.name, sizeSetLabel: set.label, sizes: set.sizes, pieceCount: set.pieceCount };
+  if (set?.status === 'inactive') throw new ApiError(422, `SizeSet ${canonical.label} is inactive`);
+  if (generateSku(pc.productCode, canonical.label) !== row.sku) throw new ApiError(422, 'SKU does not match resolved masters');
+  const sizeSetId = set?._id || new mongoose.Types.ObjectId();
+  if (set && await ProductVariant.exists({ productColour: pc._id, sizeSetRef: set._id })) throw new ApiError(409, 'This ProductColour and SizeSet already have a different SKU');
+  return { ...row, resolution: 'CREATE_SKU', productId: pc.product._id, productColourId: pc._id, sizeSetId,
+    createSizeSet: !set, productName: pc.product.name, productCode: pc.productCode, colourName: pc.colour.name,
+    sizeSetLabel: canonical.label, sizes: canonical.sizes, pieceCount: canonical.pieceCount };
 };
 const resolveRow = async (row) => {
   const variant = await variantQuery({ sku: row.sku });
@@ -153,7 +166,12 @@ const loadVariant = async (row, session) => {
   }
   if (variant) throw new ApiError(409, `SKU ${row.sku} was created after preview`);
   const pc = await ProductColour.findOne({ _id: row.productColourId, product: row.productId, status: 'active' }).populate('product colour').session(session);
-  const set = await SizeSet.findOne({ _id: row.sizeSetId, status: 'active' }).session(session);
+  let set = await SizeSet.findOne({ _id: row.sizeSetId, status: 'active' }).session(session);
+  if (!set && row.createSizeSet) {
+    const conflicting = await SizeSet.findOne({ label: row.sizeSetLabel }).collation({ locale: 'en', strength: 2 }).session(session);
+    if (conflicting) throw new ApiError(409, `Preview is stale for SizeSet ${row.sizeSetLabel}`);
+    [set] = await SizeSet.create([{ _id: row.sizeSetId, label: row.sizeSetLabel, sizes: row.sizes, pieceCount: row.pieceCount, status: 'active' }], { session });
+  }
   const generatedSku = pc && set ? generateSku(pc.productCode, set.label) : null;
   if (!pc || pc.product?.status !== 'active' || pc.colour?.status !== 'active' || !set || generatedSku !== row.sku) throw new ApiError(409, `Catalog resolution changed for SKU ${row.sku}`);
   [variant] = await ProductVariant.create([{ catalogVersion: 2, product: row.productId, productColour: row.productColourId, sizeSetRef: row.sizeSetId, sku: generatedSku, status: 'active' }], { session });

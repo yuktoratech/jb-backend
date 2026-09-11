@@ -31,7 +31,7 @@ test('Inventory Excel preview and atomic apply workflow', { timeout: 120000, ski
     assert.ok((await mongoose.connection.db.admin().command({ hello: 1 })).setName);
     await mongoose.connection.dropDatabase();
     const admin = await User.create({ name: 'Import Admin', email: 'import@example.test', phone: '9000000001', password: 'Import-Test-1!', role: 'admin', status: 'active' });
-    const category = await Category.create({ name: 'Import Category', status: 'active' });
+    const category = await Category.create({ name: 'Import Category', sizeFamily: 'ALPHA', status: 'active' });
     const subCategory = await SubCategory.create({ category: category._id, name: 'Import Sub', status: 'active' });
     const [fit, fabric, black, blue, set] = await Promise.all([
       Fit.create({ name: 'Import Fit' }), Fabric.create({ name: 'Import Fabric' }),
@@ -129,7 +129,7 @@ test('Inventory Excel preview and atomic apply workflow', { timeout: 120000, ski
       assert.equal(await Ledger.countDocuments(), ledgers); assert.equal((await ImportBatch.findById(batch.id)).status, 'VALID');
     });
 
-    await t.test('missing SKU is created only from existing ProductColour and SizeSet', async () => {
+    await t.test('missing SKU creates a valid category-compatible SizeSet when needed', async () => {
       await Variant.deleteOne({ sku: 'import_blue_s-xl' }); await Inventory.deleteOne({ sku: 'import_blue_s-xl' });
       const counts = { products: await Product.countDocuments(), colours: await Colour.countDocuments() };
       const batch = await preview(workbook(['IMPORT BLUE S-XL', 4, 'Z', 'ADD', '']));
@@ -138,6 +138,19 @@ test('Inventory Excel preview and atomic apply workflow', { timeout: 120000, ski
       const created = await Variant.findOne({ sku: 'import_blue_s-xl' }); assert.ok(created);
       assert.deepEqual(await stock(created), [{ shelf: 'Z', quantity: 4 }]);
       assert.equal(await Product.countDocuments(), counts.products); assert.equal(await Colour.countDocuments(), counts.colours);
+      const newSizeBatch = await preview(workbook(['IMPORT BLUE 2XL-3XL', 2, 'N', 'ADD', '']));
+      assert.equal(newSizeBatch.status, 'VALID', JSON.stringify(newSizeBatch.errors));
+      assert.equal(newSizeBatch.rows[0].createSizeSet, true);
+      assert.equal(await SizeSet.countDocuments({ label: '2XL-3XL' }), 0, 'preview must not create the SizeSet');
+      await service.applyImport(newSizeBatch.id, { performedBy: admin._id });
+      const createdSet = await SizeSet.findOne({ label: '2XL-3XL' }).lean();
+      const createdSizeSku = await Variant.findOne({ sku: 'IMPORT_BLUE_2XL-3XL' }).lean();
+      assert.deepEqual(createdSet.sizes, ['2XL', '3XL']);
+      assert.equal(createdSizeSku.sizeSetRef.toString(), createdSet._id.toString());
+      assert.deepEqual(await stock(createdSizeSku), [{ shelf: 'N', quantity: 2 }]);
+      const invalidFamily = await preview(workbook(['IMPORT BLUE 30-38', 1, 'A', 'ADD', '']));
+      assert.equal(invalidFamily.status, 'INVALID');
+      assert.match(invalidFamily.errors[0].message, /invalid for this alpha Category/);
       const unknown = await preview(workbook(['unknown_s-xl', 1, 'A', 'ADD', '']));
       assert.equal(unknown.status, 'INVALID'); assert.match(unknown.errors[0].message, /ProductColour could not be resolved/);
     });

@@ -82,9 +82,24 @@ const validateCatalog = async (sourceRows, initialErrors = [], { session } = {})
   const groups = new Map();
   rows.forEach((row) => { const groupKey = key(row.productName); if (!groups.has(groupKey)) groups.set(groupKey, []); groups.get(groupKey).push(row); });
   for (const groupRows of groups.values()) {
-    const first = groupRows[0];
-    const shared = (row) => [id(row.categoryId), id(row.subCategoryId), id(row.fitId), id(row.fabricId), key(row.description), row.mrpPerPieceMinor, row.status].join('\0');
-    if (groupRows.some((row) => shared(row) !== shared(first))) groupRows.forEach((row) => addIssue(state, { rowNumber: row.rowNumber, field: 'product', code: 'PRODUCT_METADATA_CONFLICT', message: `Rows for product ${row.productName} contain conflicting shared fields.` }));
+    const sharedFields = [
+      ['category', (row) => id(row.categoryId), (row) => row.categoryName],
+      ['subCategory', (row) => id(row.subCategoryId), (row) => row.subCategoryName],
+      ['fit', (row) => id(row.fitId), (row) => row.fitName],
+      ['fabric', (row) => id(row.fabricId), (row) => row.fabricName],
+      ['description', (row) => key(row.description), (row) => row.description || '(empty)'],
+      ['mrpPerPiece', (row) => row.mrpPerPieceMinor, (row) => row.mrpPerPieceMinor == null ? '(invalid)' : `₹${(row.mrpPerPieceMinor / 100).toFixed(2)}`],
+      ['status', (row) => row.status, (row) => row.status],
+    ];
+    for (const [field, valueOf, displayOf] of sharedFields) {
+      if (new Set(groupRows.map(valueOf)).size < 2) continue;
+      groupRows.forEach((row) => addIssue(state, {
+        rowNumber: row.rowNumber,
+        field,
+        code: 'PRODUCT_METADATA_CONFLICT',
+        message: `${field === 'mrpPerPiece' ? 'MRP per piece' : field} for product ${row.productName} conflicts across rows (this row: ${displayOf(row)}). Use one value for every variant of the same product.`,
+      }));
+    }
     const combinations = new Map();
     groupRows.forEach((row) => { const combination = `${id(row.colourId) || key(row.colourName)}\0${row.sizeSetLabel}`; if (!combinations.has(combination)) combinations.set(combination, []); combinations.get(combination).push(row); });
     combinations.forEach((matches) => { if (matches.length > 1) matches.forEach((row) => addIssue(state, { rowNumber: row.rowNumber, field: 'sizeSet', code: 'DUPLICATE_PRODUCT_COLOUR_SIZE_SET', message: 'This Product, Colour and Size already appears in the workbook.' })); });

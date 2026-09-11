@@ -17,6 +17,7 @@ const importRowSchema = new mongoose.Schema({
   productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true, immutable: true },
   productColourId: { type: mongoose.Schema.Types.ObjectId, ref: 'ProductColour', required: true, immutable: true },
   sizeSetId: { type: mongoose.Schema.Types.ObjectId, ref: 'SizeSet', required: true, immutable: true },
+  createSizeSet: { type: Boolean, default: false, immutable: true },
   productName: { type: String, required: true, immutable: true },
   productCode: { type: String, required: true, immutable: true },
   colourName: { type: String, required: true, immutable: true },

@@ -150,6 +150,19 @@ test('finalized Product XLSX preview/apply is validated, persisted, and atomic',
       assert.equal((await Product.findOne({ name: 'CORE' }).lean()).mrpPerPieceMinor, 99900);
     });
 
+    await t.test('shared Product conflicts identify the exact field on every affected row', async () => {
+      const conflict = await upload([
+        row({ productName: 'PRICED', productCode: 'PRICED_BLACK', sku: 'PRICED_BLACK_32-36', mrp: '1000.00' }),
+        row({ productName: 'PRICED', colour: 'BLUE', productCode: 'PRICED_BLUE', sku: 'PRICED_BLUE_34-38', sizeSet: '34-38', mrp: '1200.00' }),
+      ]);
+      assert.equal(conflict.body.data.status, 'INVALID');
+      const priceErrors = conflict.body.data.errors.filter(({ code }) => code === 'PRODUCT_METADATA_CONFLICT');
+      assert.deepEqual(priceErrors.map(({ rowNumber }) => rowNumber), [2, 3]);
+      assert.ok(priceErrors.every(({ field }) => field === 'mrpPerPiece'));
+      assert.match(priceErrors[0].message, /₹1000\.00/);
+      assert.match(priceErrors[1].message, /₹1200\.00/);
+    });
+
     await t.test('an injected failure rolls back all catalog and batch writes', async () => {
       if (!transactionCapable) return t.skip('A transaction-capable MongoDB deployment is required');
       const buffer = workbook(row({ productName: 'ROLLBACK', productCode: 'ROLLBACK_BLACK', sku: 'ROLLBACK_BLACK_32-36' }));
