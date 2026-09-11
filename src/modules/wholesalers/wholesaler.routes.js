@@ -30,6 +30,12 @@ router.patch(
   wholesalerController.updateWholesalerStatus,
 );
 
+router.delete(
+  '/:id/permanent',
+  validate(wholesalerIdSchema),
+  wholesalerController.permanentlyDeleteWholesaler,
+);
+
 router
   .route('/:id')
   .get(validate(wholesalerIdSchema), wholesalerController.getWholesaler)

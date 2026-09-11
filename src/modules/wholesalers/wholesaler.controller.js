@@ -45,10 +45,16 @@ const updateWholesalerStatus = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, data, 'Wholesaler status updated successfully'));
 });
 
+const permanentlyDeleteWholesaler = asyncHandler(async (req, res) => {
+  await wholesalerService.permanentlyDeleteWholesaler(req.validated.params.id);
+  res.status(200).json(new ApiResponse(200, null, 'Wholesaler permanently deleted successfully'));
+});
+
 module.exports = {
   createWholesaler,
   getWholesaler,
   listWholesalers,
+  permanentlyDeleteWholesaler,
   updateWholesaler,
   updateWholesalerStatus,
 };

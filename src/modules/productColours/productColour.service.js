@@ -7,6 +7,7 @@ const Product = require('../products/product.model');
 const ProductColour = require('./productColour.model');
 const { presentProductColour } = require('./productColourImage.presenter');
 const { allocateProductCode } = require('../products/catalogGeneration.service');
+const { optimizeProductImage } = require('./productImageOptimization.service');
 
 const mapError = (error) => {
   if (error instanceof ApiError) return error;
@@ -63,26 +64,54 @@ const updateProductColour = async (id, payload) => {
 const deactivateProductColour = async (id) => updateProductColour(id, { status: 'inactive' });
 
 const safeFilename = (value) => path.basename(String(value || 'image').split(/[/\\]/).pop()).replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 255) || 'image';
-const uploadImage = async (id, file, detected, { altText = '' } = {}, testHooks = {}) => {
+const cleanupObjects = async (objectKeys) => {
+  const results = await Promise.allSettled(objectKeys.map((key) => storage.deleteObject({ key })));
+  const failed = results.flatMap((result, index) => result.status === 'rejected' ? [objectKeys[index]] : []);
+  if (failed.length) {
+    console.error(`CRITICAL: failed to clean ${failed.length} ProductColour object(s)`);
+    throw new ApiError(500, 'Image upload needs administrator review because cleanup failed');
+  }
+};
+
+const uploadImages = async (id, files, { altText = '' } = {}, testHooks = {}) => {
   const record = await ProductColour.findById(id);
   if (!record) throw new ApiError(404, 'ProductColour not found');
-  if (record.images.length >= 50) throw new ApiError(409, 'ProductColour cannot contain more than 50 images');
-  const objectKey = `product-colours/${record._id}/${crypto.randomUUID()}.${detected.extension}`;
-  await storage.uploadObject({ key: objectKey, body: file.buffer, contentType: detected.contentType });
+  if (!Array.isArray(files) || !files.length) throw new ApiError(400, 'At least one product image is required');
+  if (record.images.length + files.length > 50) throw new ApiError(409, 'ProductColour cannot contain more than 50 images');
+  const optimized = await Promise.all(files.map(async (file) => ({
+    file,
+    output: await optimizeProductImage(file.buffer),
+  })));
+  const uploaded = [];
+  let uploadingObjects = true;
   try {
-    if (process.env.NODE_ENV === 'test' && testHooks.afterObjectUpload) await testHooks.afterObjectUpload({ objectKey, record });
-    record.images.push({ objectKey, originalFilename: safeFilename(file.originalname), contentType: detected.contentType, size: file.size, sortIndex: record.images.length, altText });
+    for (const { file, output } of optimized) {
+      const objectKey = `product-colours/${record._id}/${crypto.randomUUID()}.webp`;
+      uploaded.push({ objectKey, file, output });
+      await storage.uploadObject({ key: objectKey, body: output.buffer, contentType: output.contentType });
+    }
+    uploadingObjects = false;
+    if (process.env.NODE_ENV === 'test' && testHooks.afterObjectUpload) await testHooks.afterObjectUpload({ objectKeys: uploaded.map(({ objectKey }) => objectKey), record });
+    const firstSortIndex = record.images.length;
+    uploaded.forEach(({ objectKey, file, output }, index) => record.images.push({
+      objectKey,
+      originalFilename: safeFilename(file.originalname),
+      contentType: output.contentType,
+      size: output.size,
+      sortIndex: firstSortIndex + index,
+      altText,
+    }));
     await record.save();
   } catch (error) {
-    try { await storage.deleteObject({ key: objectKey }); }
-    catch (cleanupError) {
-      console.error(`CRITICAL: failed to clean uploaded ProductColour object ${objectKey}`, cleanupError);
-      throw new ApiError(500, 'Image upload needs administrator review because cleanup failed');
-    }
-    throw mapError(error);
+    await cleanupObjects(uploaded.map(({ objectKey }) => objectKey));
+    const mapped = mapError(error);
+    if (mapped !== error) throw mapped;
+    throw new ApiError(uploadingObjects ? 502 : 500, uploadingObjects ? 'Image storage upload failed.' : 'Unable to save image metadata.');
   }
   return getProductColourById(record._id);
 };
+
+const uploadImage = (id, file, detected, options, testHooks) => uploadImages(id, [file], options, testHooks);
 
 const deleteImage = async (id, imageId) => {
   const record = await ProductColour.findById(id);
@@ -125,4 +154,4 @@ const reorderImages = async (id, imageIds) => {
   return getProductColourById(id);
 };
 
-module.exports = { createProductColour, deactivateProductColour, deleteImage, getProductColourById, listProductColours, reorderImages, updateProductColour, uploadImage };
+module.exports = { createProductColour, deactivateProductColour, deleteImage, getProductColourById, listProductColours, reorderImages, updateProductColour, uploadImage, uploadImages };

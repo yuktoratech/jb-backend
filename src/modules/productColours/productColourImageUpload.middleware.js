@@ -14,24 +14,32 @@ const detectImage = (buffer) => {
 };
 const uploader = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: maxBytes(), files: 1, fields: 1, parts: 3 },
+  limits: { fileSize: maxBytes(), files: 50, fields: 1, parts: 52 },
   fileFilter(req, file, callback) {
+    if (!['image', 'images'].includes(file.fieldname)) {
+      return callback(new ApiError(400, 'Upload images using multipart field "images".'));
+    }
     return ALLOWED_MIME.has(file.mimetype?.toLowerCase())
       ? callback(null, true)
       : callback(new ApiError(400, 'Only JPEG, PNG, and WebP images are allowed'));
   },
-}).single('image');
+}).any();
 
 module.exports = (req, res, next) => uploader(req, res, (error) => {
   if (error instanceof multer.MulterError) {
     return next(new ApiError(error.code === 'LIMIT_FILE_SIZE' ? 413 : 400,
-      error.code === 'LIMIT_FILE_SIZE' ? `Product image cannot exceed ${maxBytes()} bytes` : 'Upload exactly one image using the field name "image"'));
+      error.code === 'LIMIT_FILE_SIZE' ? 'Image file is too large.' : 'Upload up to 50 images using multipart field "images".'));
   }
   if (error) return next(error instanceof ApiError ? error : new ApiError(400, 'Invalid product image upload'));
-  if (!req.file) return next(new ApiError(400, 'Product image is required in multipart field "image"'));
-  const detected = detectImage(req.file.buffer);
-  if (!detected || detected.contentType !== req.file.mimetype.toLowerCase()) return next(new ApiError(400, 'Uploaded content does not match an allowed image format'));
-  req.detectedImage = detected;
+  if (!req.files?.length) return next(new ApiError(400, 'At least one product image is required in multipart field "images".'));
+  req.detectedImages = [];
+  for (const file of req.files) {
+    const detected = detectImage(file.buffer);
+    if (!detected || detected.contentType !== file.mimetype.toLowerCase()) {
+      return next(new ApiError(400, 'Unable to process this image.'));
+    }
+    req.detectedImages.push(detected);
+  }
   return next();
 });
 

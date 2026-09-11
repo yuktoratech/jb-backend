@@ -4,8 +4,13 @@ const Colour = require('../colours/colour.model');
 const Fabric = require('../fabrics/fabric.model');
 const Fit = require('../fits/fit.model');
 const Inventory = require('../inventory/inventory.model');
+const ImportBatch = require('../inventory/importBatch.model');
+const InventoryTransaction = require('../inventory/inventoryTransaction.model');
 const inventoryService = require('../inventory/inventory.service');
 const ProductColour = require('../productColours/productColour.model');
+const storage = require('../../storage/objectStorage.service');
+const Order = require('../orders/order.model');
+const ProductImportBatch = require('../productImports/productImport.model');
 const { presentProductColour } = require('../productColours/productColourImage.presenter');
 const SizeSet = require('../sizeSets/sizeSet.model');
 const SubCategory = require('../subcategories/subCategory.model');
@@ -620,6 +625,89 @@ const deactivateProduct = async (productId) => {
   return getProductById(productId);
 };
 
+const permanentlyDeleteProduct = async (productId) => {
+  const product = await Product.findById(productId).select('_id images').lean();
+  if (!product) throw new ApiError(404, 'Product not found');
+  const variants = await ProductVariant.find({ product: productId }).select('_id').lean();
+  const variantIds = variants.map(({ _id }) => _id);
+  const productColours = await ProductColour.find({ product: productId }).select('_id images').lean();
+  const productColourIds = productColours.map(({ _id }) => _id);
+
+  const dependencies = async (session) => {
+    const hasStockDependency = variantIds.length ? await Inventory.exists({ variant: { $in: variantIds }, $or: [{ availableQuantity: { $gt: 0 } }, { 'shelves.quantity': { $gt: 0 } }] }).session(session || null) : false;
+    const hasLedgerDependency = variantIds.length ? await InventoryTransaction.exists({ variant: { $in: variantIds } }).session(session || null) : false;
+    const hasOrderDependency = await Order.exists({ $or: [
+      { 'items.productId': productId },
+      ...(productColourIds.length ? [{ 'items.productColourId': { $in: productColourIds } }] : []),
+      ...(variantIds.length ? [{ 'items.skuId': { $in: variantIds } }, { 'history.itemChanges.skuId': { $in: variantIds } }] : []),
+    ] }).session(session || null);
+    const hasProductImportDependency = await ProductImportBatch.exists({
+      $or: [
+        { 'normalizedRows.existingProductId': productId },
+        ...(productColourIds.length
+          ? [{ 'normalizedRows.existingProductColourId': { $in: productColourIds } }]
+          : []),
+        ...(variantIds.length
+          ? [{ 'normalizedRows.existingVariantId': { $in: variantIds } }]
+          : []),
+      ],
+    }).session(session || null);
+    const hasInventoryImportDependency = await ImportBatch.exists({
+      $or: [
+        { 'rows.productId': productId },
+        ...(productColourIds.length ? [{ 'rows.productColourId': { $in: productColourIds } }] : []),
+        ...(variantIds.length ? [{ 'rows.skuId': { $in: variantIds } }] : []),
+      ],
+    }).session(session || null);
+    return [hasStockDependency, hasLedgerDependency, hasOrderDependency, hasProductImportDependency, hasInventoryImportDependency];
+  };
+  const [hasStock, hasLedger, hasOrders, hasProductImport, hasInventoryImport] = await dependencies();
+  if (hasStock || hasLedger || hasOrders || hasProductImport || hasInventoryImport || product.images?.length) {
+    throw new ApiError(409, 'Cannot permanently delete this product because it is used in existing inventory or order history.');
+  }
+
+  const objectKeys = productColours.flatMap(({ images = [] }) => images.map(({ objectKey }) => objectKey));
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      // Re-read the owned records in the transaction. A ProductColour or SKU
+      // created after the initial preflight must never be orphaned by a delete.
+      const currentVariants = await ProductVariant.find({ product: productId })
+        .select('_id')
+        .session(session)
+        .lean();
+      const currentProductColours = await ProductColour.find({ product: productId })
+        .select('_id')
+        .session(session)
+        .lean();
+      const sameRecordSet = (current, original) =>
+        current.length === original.length &&
+        current.every(({ _id }) => original.some((id) => id.toString() === _id.toString()));
+
+      if (!sameRecordSet(currentVariants, variantIds) || !sameRecordSet(currentProductColours, productColourIds)) {
+        throw new ApiError(409, 'Product changed while permanent deletion was in progress');
+      }
+      if ((await dependencies(session)).some(Boolean)) {
+        throw new ApiError(409, 'Cannot permanently delete this product because it is used in existing inventory or order history.');
+      }
+      if (variantIds.length) await Inventory.deleteMany({ variant: { $in: variantIds } }, { session });
+      await ProductVariant.deleteMany({ product: productId }, { session });
+      await ProductColour.deleteMany({ product: productId }, { session });
+      const deleted = await Product.deleteOne({ _id: productId }, { session });
+      if (deleted.deletedCount !== 1) throw new ApiError(409, 'Product changed while permanent deletion was in progress');
+    });
+  } finally {
+    await session.endSession();
+  }
+
+  const cleanup = await Promise.allSettled(objectKeys.map((key) => storage.deleteObject({ key })));
+  const failedCount = cleanup.filter(({ status }) => status === 'rejected').length;
+  if (failedCount) {
+    console.error(`CRITICAL: ${failedCount} object(s) remain after permanent Product deletion`);
+    throw new ApiError(502, 'Product was removed, but image storage cleanup needs administrator review.');
+  }
+};
+
 module.exports = {
   createProduct,
   createProductForMigration,
@@ -627,5 +715,6 @@ module.exports = {
   enrichProductForMigration,
   getProductById,
   listProducts,
+  permanentlyDeleteProduct,
   updateProduct,
 };

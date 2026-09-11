@@ -35,6 +35,10 @@ Canonical uppercase single-token `name`, `description`, `categoryId`, `subCatego
 `productId`, `colourId`, canonical uppercase backend-generated `productCode`,
 `images[]`, `status`.
 
+Each image stores an object key and optimized-file metadata. New JPEG, PNG and
+WebP inputs are oriented, bounded to 1600 px without upscaling, stripped of
+unnecessary metadata and persisted only as quality-90 WebP objects.
+
 ## SKU
 
 `productId`, `productColourId`, `sizeSetId`, `sku`, `status`. Every new SKU

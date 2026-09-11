@@ -36,6 +36,13 @@ router.patch(
   retailerController.updateRetailerStatus,
 );
 
+router.delete(
+  '/:id/permanent',
+  authorize('admin'),
+  validate(retailerIdSchema),
+  retailerController.permanentlyDeleteRetailer,
+);
+
 router
   .route('/:id')
   .get(

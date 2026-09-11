@@ -27,6 +27,13 @@ router
   .get(authorize('admin', 'wholesaler', 'retailer'), validate(listVariantsSchema), productController.listProductVariants)
   .post(authorize('admin'), validate(createVariantSchema), productController.createVariant);
 
+router.delete(
+  '/:id/permanent',
+  authorize('admin'),
+  validate(productIdSchema),
+  productController.permanentlyDeleteProduct,
+);
+
 router
   .route('/:id')
   .get(authorize('admin', 'wholesaler', 'retailer'), validate(productIdSchema), productController.getProduct)

@@ -46,6 +46,11 @@ const deleteProduct = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, data, 'Product deactivated successfully'));
 });
 
+const permanentlyDeleteProduct = asyncHandler(async (req, res) => {
+  await productService.permanentlyDeleteProduct(req.validated.params.id);
+  res.status(200).json(new ApiResponse(200, null, 'Product permanently deleted successfully'));
+});
+
 const listProductVariants = asyncHandler(async (req, res) => {
   const data = await variantService.listProductVariants(
     req.validated.params.id,
@@ -74,6 +79,7 @@ module.exports = {
   deleteProduct,
   getProduct,
   listProducts,
+  permanentlyDeleteProduct,
   listProductVariants,
   updateProduct,
 };

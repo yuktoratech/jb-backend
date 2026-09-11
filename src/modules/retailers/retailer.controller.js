@@ -54,10 +54,16 @@ const updateRetailerStatus = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, data, 'Retailer status updated successfully'));
 });
 
+const permanentlyDeleteRetailer = asyncHandler(async (req, res) => {
+  await retailerService.permanentlyDeleteRetailer(req.validated.params.id);
+  res.status(200).json(new ApiResponse(200, null, 'Retailer permanently deleted successfully'));
+});
+
 module.exports = {
   createRetailer,
   getRetailer,
   listRetailers,
+  permanentlyDeleteRetailer,
   updateRetailer,
   updateRetailerStatus,
 };

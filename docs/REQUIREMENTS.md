@@ -110,8 +110,16 @@ Imports safely upsert active Products, ProductColours and SKUs. A changed MRP
 updates the Product-level price for future orders only; historical order
 snapshots remain unchanged. Inactive records are never reactivated by import.
 
-Admin Product and ProductColour Delete actions are soft archive/deactivation.
-All SKU, inventory, ledger and order-history references are retained.
+Admin Product and ProductColour deactivate actions remain soft archives. A
+separate Admin-only permanent Product delete is allowed only without stock,
+ledger, Order or import-history dependencies; it removes safely owned catalog
+records and ProductColour image objects. Wholesaler and Retailer permanent
+delete actions are also separate and dependency-blocked; historical business
+records are never cascaded.
+
+ProductColour accepts ordered multi-image uploads. JPEG, PNG and WebP inputs
+are optimized by the backend to quality-90 WebP, with correct orientation,
+longest side at most 1600 px, no upscaling and unnecessary metadata removed.
 
 ## Admin dashboard
 

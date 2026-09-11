@@ -56,6 +56,12 @@ new Colours, new Size Sets/SKUs and Product-level MRP changes. All changes apply
 atomically. Historical order pricing remains snapshotted. Delete means soft
 archive for both Product and ProductColour and preserves all references.
 
+Permanent Product deletion is a separate Admin-only action. It is blocked by
+stock, inventory ledger, Orders, or import history. When safe, owned zero-stock
+inventory shells, SKUs, ProductColours and their image objects are removed.
+Wholesaler/Retailer permanent deletion is likewise separate from status changes
+and is blocked by account or business history dependencies.
+
 ## Shelf deduction
 
 Goal: leave the minimum practical number of partially occupied shelves.

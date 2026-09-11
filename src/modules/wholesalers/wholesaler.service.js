@@ -7,6 +7,7 @@ const {
   updateManagedAccountStatus,
 } = require('../users/account.service');
 const { toSafeAccount } = require('../users/account.utils');
+const { permanentlyDeleteAccount } = require('../users/permanentDelete.service');
 
 const escapeRegex = (value) =>
   value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -131,10 +132,18 @@ const updateWholesalerStatus = async (wholesalerId, status) => {
   return updateManagedAccountStatus(wholesaler, status);
 };
 
+const permanentlyDeleteWholesaler = (wholesalerId) => permanentlyDeleteAccount({
+  userId: wholesalerId,
+  role: 'wholesaler',
+  blockOwnedRetailers: true,
+  dependencyMessage: 'Cannot permanently delete this wholesaler because related retailers or order history exist.',
+});
+
 module.exports = {
   createWholesaler,
   getWholesalerById,
   listWholesalers,
+  permanentlyDeleteWholesaler,
   updateWholesaler,
   updateWholesalerStatus,
 };

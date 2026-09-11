@@ -6,6 +6,7 @@ const {
   updateManagedAccountStatus,
 } = require('../users/account.service');
 const { toSafeAccount } = require('../users/account.utils');
+const { permanentlyDeleteAccount } = require('../users/permanentDelete.service');
 
 const escapeRegex = (value) =>
   value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -161,10 +162,17 @@ const updateRetailerStatus = async (retailerId, status, actor) => {
   return getRetailerById(retailerId, actor);
 };
 
+const permanentlyDeleteRetailer = (retailerId) => permanentlyDeleteAccount({
+  userId: retailerId,
+  role: 'retailer',
+  dependencyMessage: 'Cannot permanently delete this retailer because order history exists.',
+});
+
 module.exports = {
   createRetailer,
   getRetailerById,
   listRetailers,
+  permanentlyDeleteRetailer,
   updateRetailer,
   updateRetailerStatus,
 };
